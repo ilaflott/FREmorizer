@@ -5,6 +5,7 @@ Covers direct loading of self-contained CMOR YAML files.
 """
 
 import json
+import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -521,5 +522,62 @@ def test_dry_run_prints_python_call(tmp_path):
         dry_run_mode=True,
         print_cli_call=False,
     )
+
+
+def test_disabled_table_target_is_skipped(tmp_path, caplog):
+    """A table_target flagged disabled: true is skipped entirely -- never checked against a
+    MIP table JSON (none is even written here) and never handed to cmor_run_subtool."""
+    local_exp = tmp_path / 'exp.json'
+    shutil.copy(EXP_CONFIG, local_exp)
+    pp_dir = tmp_path / 'pp'
+    pp_dir.mkdir()
+    outdir = tmp_path / 'out'
+    outdir.mkdir()
+    table_dir = tmp_path / 'tables'
+    table_dir.mkdir()
+
+    cmor_dict = _build_cmor_dict(
+        pp_dir=str(pp_dir),
+        table_dir=str(table_dir),
+        outdir=str(outdir),
+        exp_config=str(local_exp),
+        varlist=VARLIST,
+    )
+    cmor_dict['table_targets'][0]['disabled'] = True
+    yamlfile = _write_cmor_yaml(tmp_path, cmor_dict)
+
+    with patch('fremor.cmor_yamler.cmor_run_subtool') as mock_run:
+        with caplog.at_level(logging.INFO):
+            cmor_yaml_subtool(yamlfile=yamlfile, dry_run_mode=False)
+
+    mock_run.assert_not_called()
+    assert 'table_target Omon is disabled, skipping' in caplog.text
+
+
+def test_disabled_false_table_target_is_still_processed(tmp_path):
+    """disabled: false (an explicit, non-default value) behaves the same as the flag being
+    absent -- the table_target is still processed normally."""
+    local_exp = tmp_path / 'exp.json'
+    shutil.copy(EXP_CONFIG, local_exp)
+    pp_dir = tmp_path / 'pp'
+    pp_dir.mkdir()
+    outdir = tmp_path / 'out'
+    outdir.mkdir()
+    table_dir = _write_table_json(tmp_path / 'tables', 'CMIP6', 'Omon')
+
+    cmor_dict = _build_cmor_dict(
+        pp_dir=str(pp_dir),
+        table_dir=table_dir,
+        outdir=str(outdir),
+        exp_config=str(local_exp),
+        varlist=VARLIST,
+    )
+    cmor_dict['table_targets'][0]['disabled'] = False
+    yamlfile = _write_cmor_yaml(tmp_path, cmor_dict)
+
+    with patch('fremor.cmor_yamler.cmor_run_subtool') as mock_run:
+        cmor_yaml_subtool(yamlfile=yamlfile, dry_run_mode=False)
+
+    mock_run.assert_called_once()
 
     assert not list(outdir.rglob('*.nc'))

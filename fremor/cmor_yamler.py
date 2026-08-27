@@ -160,6 +160,10 @@ def cmor_yaml_subtool( yamlfile: str = None,
         table_name = cmor_yaml_table_target['table_name']
         fre_logger.info('table_name = %s', table_name)
 
+        if cmor_yaml_table_target.get('disabled'):
+            fre_logger.info('table_target %s is disabled, skipping', table_name)
+            continue
+
         if mip_era != 'CMIP6PLUS':
             json_mip_table_config = f'{cmip_cmor_table_dir}/{mip_era}_{table_name}.json'
         else:

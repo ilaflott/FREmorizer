@@ -65,6 +65,7 @@ from collections import defaultdict, namedtuple
 from pathlib import Path
 from typing import Optional, Sequence
 
+import yaml
 from netCDF4 import Dataset
 from textual import work
 from textual.app import App, ComposeResult
@@ -305,7 +306,13 @@ class MapSession:
     edits are visible immediately (e.g. in ``table_report``) but not written to disk until
     then, so the caller can batch many edits into one explicit save. Each staged edit is
     also pushed onto an undo history (``undo()``), and the whole batch can be discarded at
-    once back to the last save (``restore_pending()``)."""
+    once back to the last save (``restore_pending()``).
+
+    A table_target's ``disabled`` flag (toggled via ``toggle_disabled()``) lives in the cmor
+    yaml itself rather than in a varlist JSON file, so it's staged and saved through a
+    separate ``disabled_dirty``/``_baseline_disabled`` pair instead of ``dirty_keys`` --
+    but ``has_pending_changes``, ``save_pending()``, and ``restore_pending()`` all account
+    for both kinds of staged edit together."""
 
     def __init__(self, yamlfile: str, table_patterns: Sequence[str] = (),
                  ncinfo_bin: Optional[str] = None, dmls_bin: Optional[str] = None):
@@ -333,6 +340,21 @@ class MapSession:
         self.dirty_keys = set()  # {(table_name, component_name, local_key), ...} -- unsaved
         self._baseline = _snapshot_varlists(self.varlists_by_table)  # state as of last save
         self._history = []  # [_Edit, ...] most-recent last -- undo() pops from the end
+
+        # disabled-flag staging: table_targets_by_name holds live references into
+        # cmor_yaml_ctx['yaml_doc'], so toggling a flag in place is immediately visible
+        # everywhere (e.g. table_report / is_disabled) without a re-read, and save_pending
+        # simply re-serializes yaml_doc to pick up every staged toggle at once.
+        self._yamlfile = yamlfile
+        self._yaml_doc = cmor_yaml_ctx['yaml_doc']
+        self.table_targets_by_name = {
+            table_target['table_name']: table_target for table_target in table_targets
+        }
+        self._baseline_disabled = {
+            name: bool(table_target.get('disabled'))
+            for name, table_target in self.table_targets_by_name.items()
+        }
+        self.disabled_dirty = set()  # {table_name, ...} -- staged disabled-flag toggles
 
     @property
     def table_names(self) -> list:
@@ -414,6 +436,30 @@ class MapSession:
                         mapped.append((table_name, cmip_var))
         return sorted(mapped)
 
+    def is_disabled(self, table_name: str) -> bool:
+        """Whether table_name's table_target currently has its ``disabled`` flag set --
+        reflects staged-but-unsaved toggle_disabled() calls immediately, since those mutate
+        the table_target dict in place."""
+        return bool(self.table_targets_by_name[table_name].get('disabled'))
+
+    def toggle_disabled(self, table_name: str) -> bool:
+        """Flip table_name's ``disabled`` flag in memory, staging the change until
+        save_pending() writes it back to the cmor yaml. Toggling back to the last-saved
+        value (e.g. disable then re-enable before saving) drops it from disabled_dirty again.
+
+        :return: the new disabled state.
+        :rtype: bool
+        """
+        table_target = self.table_targets_by_name[table_name]
+        new_state = not bool(table_target.get('disabled'))
+        table_target['disabled'] = new_state
+        if new_state == self._baseline_disabled.get(table_name, False):
+            self.disabled_dirty.discard(table_name)
+        else:
+            self.disabled_dirty.add(table_name)
+        fre_logger.info('staged disabled=%s for table %s (not yet saved)', new_state, table_name)
+        return new_state
+
     def usage_count(self, component_name: str, local_key: str) -> int:
         """Number of currently-loaded (table, component) varlists in which local_key is
         mapped to a non-empty CMIP variable for the given component -- i.e. how many times
@@ -464,17 +510,30 @@ class MapSession:
 
     @property
     def has_pending_changes(self) -> bool:
-        """True if any staged mapping edits haven't been written to disk yet."""
-        return bool(self.dirty_keys)
+        """True if any staged mapping edit or disabled-flag toggle hasn't been written to
+        disk yet."""
+        return bool(self.dirty_keys) or bool(self.disabled_dirty)
+
+    def _write_yaml_doc(self) -> None:
+        """Re-serialize the full cmor yaml document back to yamlfile -- used to persist
+        staged disabled-flag toggles, which live in the yaml itself rather than a varlist
+        JSON file. Rewrites the whole file (not just the changed lines), so hand-added
+        comments/anchors/formatting in yamlfile won't survive a save with a disabled toggle
+        staged."""
+        with open(self._yamlfile, 'w', encoding='utf-8') as handle:
+            yaml.safe_dump(self._yaml_doc, handle, sort_keys=False)
+        fre_logger.info('saved disabled-flag changes to %s', self._yamlfile)
 
     def save_pending(self) -> int:
-        """Write every varlist file with a staged change to disk, then clear dirty tracking
-        and undo history, and re-baseline for a future restore_pending().
+        """Write every varlist file with a staged change to disk, and the cmor yaml itself if
+        any disabled flag was toggled, then clear dirty tracking and undo history, and
+        re-baseline both for a future restore_pending().
 
-        :return: number of (table, component, local_key) edits that were saved.
+        :return: number of staged edits (mapping edits plus disabled-flag toggles) that were
+            saved.
         :rtype: int
         """
-        saved_count = len(self.dirty_keys)
+        saved_count = len(self.dirty_keys) + len(self.disabled_dirty)
         paths_to_write = {}
         for table_name, component_name, _local_key in self.dirty_keys:
             for component, path, data in self.varlists_by_table.get(table_name, []):
@@ -487,24 +546,36 @@ class MapSession:
                 json.dump(data, handle, indent=4)
             fre_logger.info('saved varlist %s', path)
 
+        if self.disabled_dirty:
+            self._write_yaml_doc()
+            self._baseline_disabled = {
+                name: bool(table_target.get('disabled'))
+                for name, table_target in self.table_targets_by_name.items()
+            }
+            self.disabled_dirty.clear()
+
         self.dirty_keys.clear()
         self._history.clear()
         self._baseline = _snapshot_varlists(self.varlists_by_table)
         return saved_count
 
     def restore_pending(self) -> int:
-        """Discard every staged-but-unsaved edit at once, restoring in-memory state to the
-        last save_pending() call (or to the state at load time, if nothing has been saved
-        yet). Also clears the undo history, since those edits no longer apply once the whole
-        session has been rewound past them.
+        """Discard every staged-but-unsaved edit at once (mapping edits and disabled-flag
+        toggles alike), restoring in-memory state to the last save_pending() call (or to the
+        state at load time, if nothing has been saved yet). Also clears the undo history,
+        since those edits no longer apply once the whole session has been rewound past them.
 
-        :return: number of (table, component, local_key) edits that were discarded.
+        :return: number of staged edits (mapping edits plus disabled-flag toggles) that were
+            discarded.
         :rtype: int
         """
-        discarded = len(self.dirty_keys)
+        discarded = len(self.dirty_keys) + len(self.disabled_dirty)
         self.varlists_by_table = _snapshot_varlists(self._baseline)
         self.dirty_keys.clear()
         self._history.clear()
+        for table_name in self.disabled_dirty:
+            self.table_targets_by_name[table_name]['disabled'] = self._baseline_disabled[table_name]
+        self.disabled_dirty.clear()
         fre_logger.info('restored %d staged edit(s) to last save state', discarded)
         return discarded
 
@@ -516,13 +587,18 @@ class MapSession:
 class MapApp(App):
     """Two-pane TUI: MIP-table mapping-status tree on the left, pp-directory browser +
     NetCDF preview on the right. Press 'm' to stage assigning the selected pp file to the
-    selected CMIP variable, 'd' to stage clearing a selected existing mapping, 'u' to undo
-    the single most recent staged edit, 'R' to restore every staged edit back to the last
-    save, 's' to save all staged changes to disk, 'r' to refresh the tree, and 'q' to quit
-    ('q' again to confirm if there are unsaved staged changes). Staged-but-unsaved nodes are
-    marked in place (without rebuilding the tree, so expanded branches stay expanded while
-    batching edits) and are only cleared once 's' actually writes them out; 'u' and 'R'
-    instead rebuild the tree, since they can affect many nodes at once."""
+    selected CMIP variable, 'd' to stage clearing a selected existing mapping, 't' to stage
+    toggling the disabled flag of the MIP table currently selected (or containing the
+    currently selected variable/source), 'u' to undo the single most recent staged mapping
+    edit, 'R' to restore every staged edit back to the last save, 's' to save all staged
+    changes to disk, 'r' to refresh the tree, and 'q' to quit ('q' again to confirm if there
+    are unsaved staged changes). Staged-but-unsaved mapping nodes are marked in place
+    (without rebuilding the tree, so expanded branches stay expanded while batching edits)
+    and are only cleared once 's' actually writes them out; 'u' and 'R' instead rebuild the
+    tree, since they can affect many nodes at once. A disabled-flag toggle always updates its
+    table node's label in place, immediately -- it doesn't participate in 'u' undo (toggling
+    again reverses it just as easily), but does count toward 'R' restore and 's' save like
+    any other staged edit."""
 
     CSS = """
     #cmip_pane {
@@ -561,6 +637,7 @@ class MapApp(App):
     BINDINGS = [
         ('m', 'assign_mapping', 'Stage mapping'),
         ('d', 'clear_mapping', 'Stage clear'),
+        ('t', 'toggle_disabled', 'Toggle table disabled'),
         ('u', 'undo', 'Undo last edit'),
         ('R', 'restore_pending', 'Restore to last save'),
         ('s', 'save_pending', 'Save staged changes'),
@@ -582,6 +659,10 @@ class MapApp(App):
         self.session = session
         self.selected_cmip: Optional[dict] = None
         self.selected_cmip_node = None
+        # tracks whichever MIP table is currently "in context" in the cmip tree -- set on
+        # selecting the table node itself, or any var/source node within it -- so 't' can
+        # toggle that table's disabled flag without requiring the table node exactly.
+        self.selected_table_name: Optional[str] = None
         self.selected_pp: Optional[dict] = None
         self.table_nodes = {}
         self._quit_confirmed = False
@@ -631,7 +712,11 @@ class MapApp(App):
 
     def _table_label(self, table_name: str, report: dict) -> str:
         label = f'{table_name} ({report["reference_var_count"]} vars)'
+        if self.session.is_disabled(table_name):
+            label += '  (disabled)'
         pending = sum(1 for (t, _c, _k) in self.session.dirty_keys if t == table_name)
+        if table_name in self.session.disabled_dirty:
+            pending += 1
         if pending:
             label += f' -- {pending} unsaved'
         return label
@@ -798,6 +883,8 @@ class MapApp(App):
         kind = data.get('kind')
 
         if event.control.id == 'cmip_tree':
+            if 'table' in data:
+                self.selected_table_name = data['table']
             if kind not in ('var', 'source'):
                 return
             self.selected_cmip = data
@@ -914,6 +1001,17 @@ class MapApp(App):
         self.selected_cmip_node = None
         self.query_one('#selected_cmip', Static).update(self._format_selected_cmip(None))
         self.query_one('#cmip_detail', Static).update(self.NO_CMIP_DETAIL)
+        self._quit_confirmed = False
+
+    def action_toggle_disabled(self) -> None:
+        table_name = self.selected_table_name
+        if table_name is None:
+            self.notify('select a MIP table (or one of its variables) first', severity='warning')
+            return
+        new_state = self.session.toggle_disabled(table_name)
+        self.notify(f"staged {'disabling' if new_state else 're-enabling'} {table_name} "
+                   "(press 's' to save)")
+        self._refresh_table_pending_label(table_name)
         self._quit_confirmed = False
 
     def action_undo(self) -> None:

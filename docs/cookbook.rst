@@ -428,6 +428,7 @@ Prepare the CMOR YAML (``cmor_yamls/ocean_cmor.yaml``):
 
      table_targets:
        - table_name: "Omon"
+         # disabled: true   # optional -- set to skip this table_target in `fremor yaml` entirely
          freq: "monthly"
          gridding:
            grid_label: "gn"

@@ -1431,3 +1431,172 @@ async def test_pp_file_detail_box_lists_mapped_variables(temp_dir): # pylint: di
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert 'not mapped to any MIP variable' in preview_box.content
+
+
+# ── disabled-flag toggling ──────────────────────────────────────────────────
+
+def test_mapsession_is_disabled_default_false(temp_dir): # pylint: disable=redefined-outer-name
+    ''' a table_target with no 'disabled' key at all is treated as enabled '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir)
+    session = MapSession(yamlfile)
+    assert session.is_disabled('Amon') is False
+
+
+def test_mapsession_toggle_disabled_stages_without_writing(temp_dir): # pylint: disable=redefined-outer-name
+    ''' toggle_disabled flips the in-memory flag immediately (is_disabled reflects it right
+    away) and stages it as dirty, but doesn't touch the yaml file on disk until save_pending '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir)
+    session = MapSession(yamlfile)
+    assert session.has_pending_changes is False
+
+    new_state = session.toggle_disabled('Amon')
+
+    assert new_state is True
+    assert session.is_disabled('Amon') is True
+    assert 'Amon' in session.disabled_dirty
+    assert session.has_pending_changes is True
+    on_disk = yaml.safe_load(Path(yamlfile).read_text(encoding='utf-8'))
+    assert not on_disk['cmor']['table_targets'][0].get('disabled')
+
+
+def test_mapsession_toggle_disabled_back_to_baseline_clears_dirty(temp_dir): # pylint: disable=redefined-outer-name
+    ''' toggling a flag twice (back to its last-saved value) drops it from disabled_dirty
+    again, same as a mapping edit undone back to its prior value '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir)
+    session = MapSession(yamlfile)
+
+    session.toggle_disabled('Amon')
+    session.toggle_disabled('Amon')
+
+    assert session.is_disabled('Amon') is False
+    assert 'Amon' not in session.disabled_dirty
+    assert session.has_pending_changes is False
+
+
+def test_mapsession_save_pending_writes_disabled_flag_to_yaml(temp_dir): # pylint: disable=redefined-outer-name
+    ''' save_pending persists a staged disabled toggle back into yamlfile itself (not a
+    varlist file), then clears disabled_dirty and re-baselines it '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir)
+    session = MapSession(yamlfile)
+
+    session.toggle_disabled('Amon')
+    saved_count = session.save_pending()
+
+    assert saved_count == 1
+    assert session.has_pending_changes is False
+    assert not session.disabled_dirty
+    on_disk = yaml.safe_load(Path(yamlfile).read_text(encoding='utf-8'))
+    assert on_disk['cmor']['table_targets'][0]['disabled'] is True
+    # a second toggle now stages against the freshly-saved baseline
+    session.toggle_disabled('Amon')
+    assert session.is_disabled('Amon') is False
+    assert 'Amon' in session.disabled_dirty
+
+
+def test_mapsession_save_pending_combines_mapping_and_disabled_counts(temp_dir): # pylint: disable=redefined-outer-name
+    ''' save_pending's returned count includes both staged mapping edits and staged
+    disabled-flag toggles '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir, component_names=['atmos'])
+    session = MapSession(yamlfile)
+
+    session.set_mapping('Amon', 'atmos', 'precip', 'pr')
+    session.toggle_disabled('Amon')
+
+    assert session.save_pending() == 2
+
+
+def test_mapsession_restore_pending_discards_disabled_toggle(temp_dir): # pylint: disable=redefined-outer-name
+    ''' restore_pending rewinds a staged disabled toggle back to the last-saved state too,
+    alongside mapping edits, without ever touching the yaml file on disk '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir, component_names=['atmos'])
+    session = MapSession(yamlfile)
+
+    session.set_mapping('Amon', 'atmos', 'precip', 'pr')
+    session.toggle_disabled('Amon')
+    discarded = session.restore_pending()
+
+    assert discarded == 2
+    assert session.is_disabled('Amon') is False
+    assert not session.disabled_dirty
+    assert session.has_pending_changes is False
+    on_disk = yaml.safe_load(Path(yamlfile).read_text(encoding='utf-8'))
+    assert not on_disk['cmor']['table_targets'][0].get('disabled')
+
+
+@pytest.mark.asyncio
+async def test_map_app_toggle_disabled_key(temp_dir): # pylint: disable=redefined-outer-name
+    ''' pressing 't' with a MIP table node selected stages toggling its disabled flag (marks
+    the node label in place, doesn't touch the yaml file yet); pressing 's' afterward saves it '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir)
+    session = MapSession(yamlfile)
+    app = MapApp(session)
+
+    async with app.run_test() as pilot:
+        cmip_tree = app.query_one('#cmip_tree')
+        table_node = cmip_tree.root.children[0]
+        app.on_tree_node_selected(_FakeTreeEvent(table_node, 'cmip_tree'))
+        await pilot.pause()
+
+        await pilot.press('t')
+        await pilot.pause()
+
+        assert session.is_disabled('Amon') is True
+        assert session.has_pending_changes
+        assert '(disabled)' in str(table_node.label)
+        assert 'unsaved' in str(table_node.label)
+        on_disk = yaml.safe_load(Path(yamlfile).read_text(encoding='utf-8'))
+        assert not on_disk['cmor']['table_targets'][0].get('disabled')
+
+        await pilot.press('s')
+        await pilot.pause()
+
+    assert not session.has_pending_changes
+    on_disk = yaml.safe_load(Path(yamlfile).read_text(encoding='utf-8'))
+    assert on_disk['cmor']['table_targets'][0]['disabled'] is True
+
+
+@pytest.mark.asyncio
+async def test_map_app_toggle_disabled_from_variable_selection(temp_dir): # pylint: disable=redefined-outer-name
+    ''' 't' also works with a variable/source node selected (not just the table node itself)
+    -- it toggles whichever table that variable belongs to '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir)
+    session = MapSession(yamlfile)
+    app = MapApp(session)
+
+    async with app.run_test() as pilot:
+        cmip_tree = app.query_one('#cmip_tree')
+        table_node = cmip_tree.root.children[0]
+        unmapped_node = table_node.children[0]
+        pr_node = next(n for n in unmapped_node.children if n.data['var'] == 'pr')
+        app.on_tree_node_selected(_FakeTreeEvent(pr_node, 'cmip_tree'))
+        await pilot.pause()
+
+        await pilot.press('t')
+        await pilot.pause()
+
+        assert session.is_disabled('Amon') is True
+
+
+@pytest.mark.asyncio
+async def test_map_app_toggle_disabled_no_selection_warns(temp_dir): # pylint: disable=redefined-outer-name
+    ''' pressing 't' with nothing selected yet warns instead of raising '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir)
+    app = MapApp(MapSession(yamlfile))
+
+    async with app.run_test() as pilot:
+        notifications = []
+        app.notify = lambda message, **kwargs: notifications.append(message) # pylint: disable=protected-access
+
+        await pilot.press('t')
+        await pilot.pause()
+
+        assert any('select' in message for message in notifications)
