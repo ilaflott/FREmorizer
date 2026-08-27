@@ -388,14 +388,16 @@ def test_mapsession_set_mapping_stages_without_writing(temp_dir): # pylint: disa
 def test_mapsession_save_pending_creates_new_varlist(temp_dir): # pylint: disable=redefined-outer-name
     ''' save_pending flushes a staged mapping for a component not yet declared in the yaml
     to a brand-new varlist file, inferring the varlist directory from an existing
-    table_target entry, then clears dirty tracking '''
+    table_target entry, and also stages+saves a new target_components entry for it (using
+    the given chunk) so fremor yaml will actually read the new varlist -- then clears dirty
+    tracking '''
     pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
     (Path(varlist_dir) / 'CMIP6_Amon_landuse.list').write_text(
         json.dumps({'x': 'ps'}), encoding='utf-8')
     yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir, component_names=['landuse'])
     session = MapSession(yamlfile)
 
-    session.set_mapping('Amon', 'atmos', 'precip', 'pr')
+    session.set_mapping('Amon', 'atmos', 'precip', 'pr', chunk='5yr')
     saved_count = session.save_pending()
 
     assert saved_count == 1
@@ -403,6 +405,57 @@ def test_mapsession_save_pending_creates_new_varlist(temp_dir): # pylint: disabl
     out_path = Path(varlist_dir) / 'CMIP6_Amon_atmos.list'
     assert out_path.exists()
     assert json.loads(out_path.read_text(encoding='utf-8')) == {'precip': 'pr'}
+
+    new_component = next(
+        comp for comp in session.table_targets_by_name['Amon']['target_components']
+        if comp['component_name'] == 'atmos')
+    assert new_component == {
+        'component_name': 'atmos',
+        'variable_list': str(out_path),
+        'data_series_type': 'ts',
+        'chunk': 'P5Y',
+    }
+    saved_doc = yaml.safe_load(Path(yamlfile).read_text(encoding='utf-8'))
+    saved_component_names = {
+        comp['component_name']
+        for comp in saved_doc['cmor']['table_targets'][0]['target_components']
+    }
+    assert saved_component_names == {'landuse', 'atmos'}
+
+
+def test_mapsession_set_mapping_new_component_requires_chunk(temp_dir): # pylint: disable=redefined-outer-name
+    ''' mapping a component with no target_components entry yet requires a chunk to create
+    one -- without it, the new varlist would be an orphan file fremor yaml never reads '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    (Path(varlist_dir) / 'CMIP6_Amon_landuse.list').write_text('{}', encoding='utf-8')
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir, component_names=['landuse'])
+    session = MapSession(yamlfile)
+
+    with pytest.raises(ValueError, match='no chunk was given'):
+        session.set_mapping('Amon', 'atmos', 'precip', 'pr')
+
+
+def test_mapsession_restore_pending_undoes_new_target_components_entry(temp_dir): # pylint: disable=redefined-outer-name
+    ''' restore_pending discards a staged-but-unsaved new target_components entry along with
+    its varlist mapping, leaving the yaml's table_target exactly as it was before '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    (Path(varlist_dir) / 'CMIP6_Amon_landuse.list').write_text('{}', encoding='utf-8')
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir, component_names=['landuse'])
+    session = MapSession(yamlfile)
+
+    session.set_mapping('Amon', 'atmos', 'precip', 'pr', chunk='5yr')
+    assert session.has_pending_changes is True
+
+    discarded = session.restore_pending()
+
+    assert discarded == 1
+    assert session.has_pending_changes is False
+    component_names = {
+        comp['component_name']
+        for comp in session.table_targets_by_name['Amon']['target_components']
+    }
+    assert component_names == {'landuse'}
+    assert not (Path(varlist_dir) / 'CMIP6_Amon_atmos.list').exists()
 
 
 def test_mapsession_save_pending_noop_when_clean(temp_dir): # pylint: disable=redefined-outer-name
@@ -566,6 +619,31 @@ def test_mapsession_restore_pending_after_save_keeps_saved_edits(temp_dir): # py
     assert 'pr' not in dict(report['one_to_one_mapped'])
 
 
+def test_mapsession_table_patterns_scope_varlists_not_just_table_paths(temp_dir): # pylint: disable=redefined-outer-name
+    ''' varlists_by_table (and therefore usage_count/mapped_variables) must only reflect
+    tables actually selected via table_patterns -- a mapping in an unselected table (e.g.
+    Lmon when only Amon was requested) must not leak into usage_count for a shared
+    component/local_key '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    _write_table(tables_dir, 'Lmon', ['mrso'])
+    amon_list = Path(varlist_dir) / 'CMIP6_Amon_atmos.list'
+    amon_list.write_text(json.dumps({}), encoding='utf-8')
+    land_list = Path(varlist_dir) / 'CMIP6_Lmon_land.list'
+    land_list.write_text(json.dumps({'soil_moist': 'mrso'}), encoding='utf-8')
+
+    yamlfile = _write_map_yaml(temp_dir, pp_dir, tables_dir, [
+        _table_target('Amon', [_component_entry('atmos', amon_list)]),
+        _table_target('Lmon', [_component_entry('land', land_list)]),
+    ])
+
+    session = MapSession(yamlfile, table_patterns=['Amon'])
+
+    assert session.table_names == ['Amon']
+    assert 'Lmon' not in session.varlists_by_table
+    assert session.usage_count('land', 'soil_moist') == 0
+    assert session.mapped_variables('land', 'soil_moist') == []
+
+
 def test_mapsession_usage_count(temp_dir): # pylint: disable=redefined-outer-name
     ''' usage_count reflects how many loaded tables' varlists map a given (component,
     local_key) to a non-empty CMIP variable, ignoring other components/keys and empty
@@ -712,6 +790,64 @@ async def test_map_app_assign_mapping(temp_dir): # pylint: disable=redefined-out
 
     assert out_path.exists()
     assert json.loads(out_path.read_text(encoding='utf-8')) == {'pr': 'pr'}
+    assert not session.has_pending_changes
+
+
+@pytest.mark.asyncio
+async def test_map_app_assign_mapping_reassigns_and_clears_old_source(temp_dir): # pylint: disable=redefined-outer-name
+    ''' pressing 'm' on a new pp file while a different, already-mapped source is selected in
+    the cmip tree reassigns the variable to the new source and clears the old one, so it
+    isn't left mapped from both at once (which fremor check would then flag as
+    multiply-mapped) '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    (Path(varlist_dir) / 'CMIP6_Amon_atmos.list').write_text(
+        json.dumps({'t_ref': 'tas'}), encoding='utf-8'
+    )
+    comp_ts_dir = Path(pp_dir) / 'atmos' / 'ts' / 'monthly' / '5yr'
+    comp_ts_dir.mkdir(parents=True)
+    _write_nc_file(comp_ts_dir / 'atmos.000101-000512.t_ref.nc', 't_ref')
+    _write_nc_file(comp_ts_dir / 'atmos.000101-000512.t_ref2.nc', 't_ref2')
+
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir, component_names=['atmos'])
+    session = MapSession(yamlfile)
+    app = MapApp(session)
+    out_path = Path(varlist_dir) / 'CMIP6_Amon_atmos.list'
+
+    async with app.run_test() as pilot:
+        cmip_tree = app.query_one('#cmip_tree')
+        table_node = cmip_tree.root.children[0]
+        # branches: Unmapped, Mapped, Multiply-mapped, Unknown
+        mapped_node = table_node.children[1]
+        source_node = next(n for n in mapped_node.children if n.data['var'] == 'tas')
+        app.on_tree_node_selected(_FakeTreeEvent(source_node, 'cmip_tree'))
+        assert app.selected_cmip['kind'] == 'source'
+        assert app.selected_cmip['local_key'] == 't_ref'
+        # selecting a 'source' node auto-navigates the pp tree to its current file via the
+        # real Tree.select_node (queues its own NodeSelected message) -- let that settle
+        # before directly selecting a different pp file below, or the queued message would
+        # land afterward and clobber selected_pp back to the old file.
+        await pilot.pause()
+
+        pp_tree = app.query_one('#pp_tree')
+        component_node = pp_tree.root.children[0]
+        app.on_tree_node_expanded(_FakeTreeEvent(component_node, 'pp_tree'))
+        freq_node = component_node.children[0]
+        app.on_tree_node_expanded(_FakeTreeEvent(freq_node, 'pp_tree'))
+        chunk_node = freq_node.children[0]
+        app.on_tree_node_expanded(_FakeTreeEvent(chunk_node, 'pp_tree'))
+        new_file_node = next(n for n in chunk_node.children if n.data['local_key'] == 't_ref2')
+        app.on_tree_node_selected(_FakeTreeEvent(new_file_node, 'pp_tree'))
+        await pilot.pause()
+
+        await pilot.press('m')
+        await pilot.pause()
+
+        assert str(source_node.label).endswith('(deleted)')
+
+        await pilot.press('s')
+        await pilot.pause()
+
+    assert json.loads(out_path.read_text(encoding='utf-8')) == {'t_ref': '', 't_ref2': 'tas'}
     assert not session.has_pending_changes
 
 
@@ -1667,6 +1803,54 @@ async def test_map_app_assign_mapping_blocked_on_freq_mismatch(temp_dir): # pyli
         assert freq_node.data['freq'] == 'daily'
         app.on_tree_node_expanded(_FakeTreeEvent(freq_node, 'pp_tree'))
         chunk_node = freq_node.children[0]
+        app.on_tree_node_expanded(_FakeTreeEvent(chunk_node, 'pp_tree'))
+        file_node = chunk_node.children[0]
+        app.on_tree_node_selected(_FakeTreeEvent(file_node, 'pp_tree'))
+        await pilot.pause()
+
+        notifications = []
+        app.notify = lambda message, **kwargs: notifications.append((message, kwargs.get('severity'))) # pylint: disable=protected-access
+
+        await pilot.press('m')
+        await pilot.pause()
+
+        assert not session.has_pending_changes
+        assert not out_path.exists()
+        assert any(sev == 'error' for _msg, sev in notifications)
+
+
+@pytest.mark.asyncio
+async def test_map_app_assign_mapping_blocked_on_chunk_mismatch(temp_dir): # pylint: disable=redefined-outer-name
+    ''' pressing 'm' refuses to stage a mapping when the selected pp file lives under a chunk
+    directory that doesn't match the component's configured chunk -- fremor yaml would never
+    actually find the file there at CMORization time, so nothing is staged '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+
+    # atmos's target_components chunk defaults to 'P5Y' (bronx '5yr'), but this pp file lives
+    # under '10yr'
+    comp_ts_dir = Path(pp_dir) / 'atmos' / 'ts' / 'monthly' / '10yr'
+    comp_ts_dir.mkdir(parents=True)
+    _write_nc_file(comp_ts_dir / 'atmos.000101-001012.pr.nc', 'pr', units='kg m-2 s-1')
+
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir, component_names=['atmos'])
+    session = MapSession(yamlfile)
+    app = MapApp(session)
+    out_path = Path(varlist_dir) / 'CMIP6_Amon_atmos.list'
+
+    async with app.run_test() as pilot:
+        cmip_tree = app.query_one('#cmip_tree')
+        table_node = cmip_tree.root.children[0]
+        unmapped_node = table_node.children[0]
+        pr_node = next(n for n in unmapped_node.children if n.data['var'] == 'pr')
+        app.on_tree_node_selected(_FakeTreeEvent(pr_node, 'cmip_tree'))
+
+        pp_tree = app.query_one('#pp_tree')
+        component_node = pp_tree.root.children[0]
+        app.on_tree_node_expanded(_FakeTreeEvent(component_node, 'pp_tree'))
+        freq_node = component_node.children[0]
+        app.on_tree_node_expanded(_FakeTreeEvent(freq_node, 'pp_tree'))
+        chunk_node = freq_node.children[0]
+        assert chunk_node.data['chunk'] == '10yr'
         app.on_tree_node_expanded(_FakeTreeEvent(chunk_node, 'pp_tree'))
         file_node = chunk_node.children[0]
         app.on_tree_node_selected(_FakeTreeEvent(file_node, 'pp_tree'))

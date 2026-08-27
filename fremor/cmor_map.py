@@ -29,7 +29,20 @@ freq subdirectory fremor yaml will actually read pp files from for that table at
 CMORization time, so staging a mapping ('m') from a pp file under a *different* freq is
 refused outright, and auto-navigating to an already-mapped variable's source prefers a file
 under the table's configured freq, falling back (with a warning) to a mismatched one only if
-that's all that exists.
+that's all that exists. A component's configured ``chunk`` (e.g. ``P5Y`` -> ``5yr``) is
+checked the same way: staging a mapping from a pp file under a different chunk directory is
+refused too, since fremor yaml would never actually read it from there either.
+
+Reassigning an already-mapped CMIP variable to a new pp source ('m' with a ``source`` node
+selected in the cmip tree) also stages clearing its previous source in the same action, so
+the variable doesn't end up mapped from both the old and new source at once (which ``fremor
+check`` would then flag as multiply-mapped).
+
+Mapping a pp file whose component has no ``target_components`` entry at all yet for the
+selected table also stages one for it (``data_series_type='ts'``, chunk taken from the pp
+file's own chunk directory) alongside the new varlist, so ``fremor yaml`` will actually read
+it once saved -- a varlist with no yaml entry pointing at it would otherwise be silently
+never consumed.
 
 Mapping/clearing a variable only stages the change in memory -- nothing is written to disk
 until the user explicitly saves, so the tree doesn't collapse/re-categorize after every
@@ -79,11 +92,11 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Static, Tree
 
-from .cmor_check import _build_table_report, _dmls_state_for_file, _find_dmls_bin, \
-    _is_file_staged, _matching_variable_keys, _mip_table_paths, _select_table_names, \
-    _varlists_by_table_from_yaml
-from .cmor_config import _load_config_yaml
-from .cmor_helpers import get_json_file_data
+from .cmor_check import _build_table_report, _DMLS_DISK_RESIDENT_STATES, _dmls_state_for_file, \
+    _find_dmls_bin, _is_file_staged, _matching_variable_keys, _mip_table_paths, \
+    _select_table_names, _varlists_by_table_from_yaml
+from .cmor_config import _bronx_to_iso_chunk, _load_config_yaml
+from .cmor_helpers import get_json_file_data, iso_to_bronx_chunk
 
 fre_logger = logging.getLogger(__name__)
 
@@ -174,9 +187,6 @@ def _ncinfo_preview(nc_path: str, var_name: str, ncinfo_bin: Optional[str] = Non
         if variable.get('name') == var_name:
             return variable
     return None
-
-
-_DMLS_DISK_RESIDENT_STATES = {'REG', 'DUL'}
 
 
 def _format_tape_message(local_var_name: str, nc_path: str, dmls_state: Optional[str]) -> str:
@@ -334,6 +344,14 @@ class MapSession:
             raise ValueError(
                 f'no table_targets in {yamlfile} matched table_patterns {list(table_patterns)}')
 
+        # scope everything below to just the selected tables -- a component/varlist entry
+        # from an unselected table (e.g. Lmon when only Amon was requested) must never leak
+        # into usage_count/mapped_variables, which iterate varlists_by_table wholesale.
+        selected_table_targets = [
+            table_target for table_target in table_targets
+            if table_target['table_name'] in table_names
+        ]
+
         self.pp_dir = cmor_yaml_ctx['pp_dir']
         self.mip_era = cmor_yaml_ctx['mip_era']
         self.era_upper = self.mip_era.upper()
@@ -342,7 +360,7 @@ class MapSession:
 
         self.table_paths = _mip_table_paths(cmor_yaml_ctx['mip_tables_dir'], self.mip_era,
                                             table_names)
-        self.varlists_by_table = _varlists_by_table_from_yaml(table_targets)
+        self.varlists_by_table = _varlists_by_table_from_yaml(selected_table_targets)
         self.varlist_dir = _infer_varlist_dir(table_targets)
         self.dirty_keys = set()  # {(table_name, component_name, local_key), ...} -- unsaved
         self._baseline = _snapshot_varlists(self.varlists_by_table)  # state as of last save
@@ -355,13 +373,19 @@ class MapSession:
         self._yamlfile = yamlfile
         self._yaml_doc = cmor_yaml_ctx['yaml_doc']
         self.table_targets_by_name = {
-            table_target['table_name']: table_target for table_target in table_targets
+            table_target['table_name']: table_target for table_target in selected_table_targets
         }
         self._baseline_disabled = {
             name: bool(table_target.get('disabled'))
             for name, table_target in self.table_targets_by_name.items()
         }
         self.disabled_dirty = set()  # {table_name, ...} -- staged disabled-flag toggles
+
+        # like disabled-flag staging, a new target_components entry (staged by set_mapping
+        # when mapping a component with no existing entry -- see there) is appended directly
+        # into a live table_target dict, so it's visible immediately and persisted by the
+        # same _write_yaml_doc save path; {(table_name, component_name), ...}
+        self.new_target_components = set()
 
     @property
     def table_names(self) -> list:
@@ -393,12 +417,24 @@ class MapSession:
         return {key: variable_entry[key] for key in keys}
 
     def set_mapping(self, table_name: str, component_name: str, local_key: str,
-                    cmip_var: str) -> None:
+                    cmip_var: str, chunk: Optional[str] = None) -> None:
         """Stage data[local_key] = cmip_var for the component's variable_list, creating an
         in-memory entry (placed in the varlist directory inferred from the yaml's existing
         variable_list entries) if this component/table pair had no varlist yet in the yaml.
         The change is visible immediately (e.g. in table_report) but not written to disk
-        until save_pending() is called."""
+        until save_pending() is called.
+
+        If component_name has no existing target_components entry for table_name at all, a
+        new one (data_series_type='ts' -- the only shape the map UI's pp-tree traversal can
+        ever discover a file under) is staged alongside the new varlist, using `chunk`
+        (bronx-form, e.g. '5yr' -- the chunk directory the mapped pp file actually came from)
+        as its chunk. Without this, the new varlist would be an orphan file fremor yaml never
+        reads, since it only iterates variable_list paths already present in the yaml.
+
+        :raises ValueError: if `chunk` is omitted while creating a first-ever
+            target_components entry for component_name, or no existing variable_list entry
+            anywhere in the yaml exists to infer a varlist directory from.
+        """
         entries = self.varlists_by_table.setdefault(table_name, [])
         for component, path, data in entries:
             if component == component_name:
@@ -406,6 +442,10 @@ class MapSession:
                 data[local_key] = cmip_var
                 break
         else:
+            already_declared = any(
+                comp.get('component_name') == component_name
+                for comp in self.table_targets_by_name[table_name].get('target_components') or []
+            )
             if self.varlist_dir is None:
                 raise ValueError(
                     f'cannot create a new varlist for component {component_name!r} in table '
@@ -413,6 +453,26 @@ class MapSession:
                     'a varlist directory from')
             fname = f'{self.era_upper}_{table_name}_{component_name}.list'
             path = f'{self.varlist_dir}/{fname}'
+
+            if not already_declared:
+                if chunk is None:
+                    raise ValueError(
+                        f'cannot map component {component_name!r} into table {table_name!r}: '
+                        'it has no target_components entry yet and no chunk was given to '
+                        'create one -- the new varlist would be an orphan file fremor yaml '
+                        'never reads')
+                target_components = self.table_targets_by_name[table_name].setdefault(
+                    'target_components', [])
+                target_components.append({
+                    'component_name': component_name,
+                    'variable_list': path,
+                    'data_series_type': 'ts',
+                    'chunk': _bronx_to_iso_chunk(chunk),
+                })
+                self.new_target_components.add((table_name, component_name))
+                fre_logger.info('staged new target_components entry for %s/%s (not yet saved)',
+                                table_name, component_name)
+
             data = get_json_file_data(path) if Path(path).is_file() else {}
             old_value = data.get(local_key, _UNSET)
             data[local_key] = cmip_var
@@ -452,6 +512,17 @@ class MapSession:
         CMIP6-family eras) -- freq-based validation in the map UI is skipped in that case
         rather than guessing."""
         return self.table_targets_by_name[table_name].get('freq')
+
+    def component_chunk(self, table_name: str, component_name: str) -> Optional[str]:
+        """Bronx-form chunk (e.g. '5yr') configured for component_name's target_components
+        entry in table_name's table_target -- the only chunk directory fremor yaml will
+        actually read pp files from for that component at CMORization time, regardless of
+        which chunk directory a pp file staged in this UI happens to live under. None if the
+        component has no entry for this table, or that entry has no chunk configured."""
+        for comp in self.table_targets_by_name[table_name].get('target_components') or []:
+            if comp.get('component_name') == component_name and comp.get('chunk'):
+                return iso_to_bronx_chunk(comp['chunk'])
+        return None
 
     def is_disabled(self, table_name: str) -> bool:
         """Whether table_name's table_target currently has its ``disabled`` flag set --
@@ -527,24 +598,24 @@ class MapSession:
 
     @property
     def has_pending_changes(self) -> bool:
-        """True if any staged mapping edit or disabled-flag toggle hasn't been written to
-        disk yet."""
-        return bool(self.dirty_keys) or bool(self.disabled_dirty)
+        """True if any staged mapping edit, disabled-flag toggle, or new target_components
+        entry hasn't been written to disk yet."""
+        return bool(self.dirty_keys) or bool(self.disabled_dirty) or bool(self.new_target_components)
 
     def _write_yaml_doc(self) -> None:
         """Re-serialize the full cmor yaml document back to yamlfile -- used to persist
-        staged disabled-flag toggles, which live in the yaml itself rather than a varlist
-        JSON file. Rewrites the whole file (not just the changed lines), so hand-added
-        comments/anchors/formatting in yamlfile won't survive a save with a disabled toggle
-        staged."""
+        staged disabled-flag toggles and new target_components entries, both of which live in
+        the yaml itself rather than a varlist JSON file. Rewrites the whole file (not just the
+        changed lines), so hand-added comments/anchors/formatting in yamlfile won't survive a
+        save with either staged."""
         with open(self._yamlfile, 'w', encoding='utf-8') as handle:
             yaml.safe_dump(self._yaml_doc, handle, sort_keys=False)
-        fre_logger.info('saved disabled-flag changes to %s', self._yamlfile)
+        fre_logger.info('saved yaml changes to %s', self._yamlfile)
 
     def save_pending(self) -> int:
         """Write every varlist file with a staged change to disk, and the cmor yaml itself if
-        any disabled flag was toggled, then clear dirty tracking and undo history, and
-        re-baseline both for a future restore_pending().
+        any disabled flag was toggled or a new target_components entry was staged, then clear
+        dirty tracking and undo history, and re-baseline both for a future restore_pending().
 
         :return: number of staged edits (mapping edits plus disabled-flag toggles) that were
             saved.
@@ -563,13 +634,14 @@ class MapSession:
                 json.dump(data, handle, indent=4)
             fre_logger.info('saved varlist %s', path)
 
-        if self.disabled_dirty:
+        if self.disabled_dirty or self.new_target_components:
             self._write_yaml_doc()
             self._baseline_disabled = {
                 name: bool(table_target.get('disabled'))
                 for name, table_target in self.table_targets_by_name.items()
             }
             self.disabled_dirty.clear()
+            self.new_target_components.clear()
 
         self.dirty_keys.clear()
         self._history.clear()
@@ -593,6 +665,12 @@ class MapSession:
         for table_name in self.disabled_dirty:
             self.table_targets_by_name[table_name]['disabled'] = self._baseline_disabled[table_name]
         self.disabled_dirty.clear()
+        for table_name, component_name in self.new_target_components:
+            target_components = self.table_targets_by_name[table_name].get('target_components') or []
+            self.table_targets_by_name[table_name]['target_components'] = [
+                comp for comp in target_components if comp.get('component_name') != component_name
+            ]
+        self.new_target_components.clear()
         fre_logger.info('restored %d staged edit(s) to last save state', discarded)
         return discarded
 
@@ -851,7 +929,7 @@ class MapApp(App):
                 node.add_leaf(
                     self._pp_file_label(nc_path, local_var, usage_count),
                     data={'kind': 'file', 'path': nc_path, 'component': data['component'],
-                          'local_key': local_var, 'freq': data['freq']})
+                          'local_key': local_var, 'freq': data['freq'], 'chunk': data['chunk']})
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         if event.control.id != 'pp_tree':
@@ -1039,10 +1117,39 @@ class MapApp(App):
                 f'{local_key} there at CMORization time. Pick a pp file under "{table_freq}" '
                 'instead.', severity='error')
             return
-        self.session.set_mapping(table_name, component, local_key, cmip_var)
+        component_chunk = self.session.component_chunk(table_name, component)
+        pp_chunk = self.selected_pp.get('chunk')
+        if component_chunk and pp_chunk and component_chunk != pp_chunk:
+            self.notify(
+                f'{component} in {table_name} is configured for chunk "{component_chunk}", '
+                f'but the selected pp file is under chunk "{pp_chunk}" -- fremor yaml would '
+                f'never actually find {local_key} there at CMORization time. Pick a pp file '
+                f'under "{component_chunk}" instead.', severity='error')
+            return
+
+        # reassigning an already-mapped source (rather than mapping a previously-unmapped
+        # variable) must clear its old (component, local_key) too, once the new mapping is
+        # staged successfully -- otherwise both old and new sources stay mapped to cmip_var,
+        # which fremor check would then flag as multiply-mapped.
+        reassigning_source = self.selected_cmip.get('kind') == 'source'
+        old_component = self.selected_cmip.get('component')
+        old_local_key = self.selected_cmip.get('local_key')
+
+        try:
+            self.session.set_mapping(table_name, component, local_key, cmip_var,
+                                     chunk=self.selected_pp.get('chunk'))
+        except ValueError as exc:
+            self.notify(str(exc), severity='error')
+            return
+
+        if reassigning_source and (old_component, old_local_key) != (component, local_key):
+            self.session.clear_mapping(table_name, old_component, old_local_key)
+            self._mark_deleted(self.selected_cmip_node, table_name)
+        else:
+            self._mark_assigned(self.selected_cmip_node, table_name, component, local_key)
+
         self.notify(f'staged {local_key} ({component}) -> {cmip_var} in {table_name} '
                    "(press 's' to save)")
-        self._mark_assigned(self.selected_cmip_node, table_name, component, local_key)
         self._quit_confirmed = False
 
     def action_clear_mapping(self) -> None:
