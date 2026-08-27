@@ -301,11 +301,13 @@ def _staging_status(files: list, dmls_bin: Optional[str] = None) -> dict:
 # hybrid-sigma variables -- is the companion .ps.nc file present?
 # ---------------------------------------------------------------------------
 
-def _mip_table_vertical_token(mip_dims: str) -> Optional[str]:
-    """Pick the vertical-coordinate token out of a MIP table variable's space-delimited
-    'dimensions' string (e.g. 'longitude latitude alevel time' -> 'alevel'), or None if the
-    variable has no vertical dimension."""
-    for token in (mip_dims or '').split():
+def _mip_table_vertical_token(mip_dims: Union[str, list]) -> Optional[str]:
+    """Pick the vertical-coordinate token out of a MIP table variable's 'dimensions' entry
+    (e.g. 'longitude latitude alevel time' -> 'alevel'), or None if the variable has no
+    vertical dimension. 'dimensions' is a space-delimited string in CMIP6/CMIP6Plus tables
+    but a JSON list in CMIP7 tables."""
+    tokens = (mip_dims or '').split() if isinstance(mip_dims, str) else (mip_dims or [])
+    for token in tokens:
         if token in KNOWN_MIP_VERTICAL_TOKENS or token.startswith('plev'):
             return token
     return None

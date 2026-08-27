@@ -323,6 +323,20 @@ def _write_table_with_dims(tables_dir, table_name, var_dims):
     )
 
 
+def _write_cmip7_table_with_dims(tables_dir, table_name, var_dims):
+    ''' like _write_table_with_dims, but for a CMIP7-style table: keys are brand-suffixed
+    (``{var}_{brand}``) and 'dimensions' is a JSON list rather than a space-delimited
+    string, matching the real mip-cmor-tables CMIP7 format. '''
+    variable_entry = {
+        name: {'standard_name': name.split('_')[0], 'dimensions': dims}
+        for name, dims in var_dims.items()
+    }
+    (Path(tables_dir) / f'CMIP7_{table_name}.json').write_text(
+        json.dumps({'Header': {'table_id': f'Table {table_name}'}, 'variable_entry': variable_entry}),
+        encoding='utf-8'
+    )
+
+
 def _write_input_nc(nc_path, local_var, vertical_dim=None):
     ''' write a minimal real netCDF file with a time dim, optional vertical dim (axis='Z'),
     and a data variable named local_var over those dims '''
@@ -585,6 +599,36 @@ def test_cmor_check_subtool_dims_missing_ps_file(temp_dir): # pylint: disable=re
     dims = report['Amon']['files']['ta']['dims']
     assert dims['status'] == 'ok'
     assert dims['missing_ps_file'] == str(comp_dir / 'atmos.197901-198312.ps.nc')
+
+
+def test_cmor_check_subtool_dims_ok_cmip7_list_dimensions(temp_dir): # pylint: disable=redefined-outer-name
+    ''' check_dims: CMIP7 tables declare 'dimensions' as a JSON list (not a space-delimited
+    string like CMIP6/CMIP6Plus) -- _mip_table_vertical_token must handle both. '''
+    temp_root = Path(temp_dir)
+    tables_dir = temp_root / 'tables'
+    tables_dir.mkdir()
+    _write_cmip7_table_with_dims(tables_dir, 'Amon', {
+        'ta_tavg-al': ['longitude', 'latitude', 'alevel', 'time'],
+    })
+
+    varlist_dir = temp_root / 'varlists'
+    varlist_dir.mkdir()
+    atmos_list = varlist_dir / 'CMIP7_Amon_atmos.list'
+    atmos_list.write_text(json.dumps({'ta': 'ta'}), encoding='utf-8')
+
+    pp_dir = temp_root / 'pp'
+    yamlfile = _write_yaml(temp_dir, [
+        _table_target('Amon', [_component_entry('atmos', atmos_list)])
+    ], mip_era='cmip7', table_dir=tables_dir, pp_dir=pp_dir)
+
+    comp_dir = _input_dir(pp_dir, 'atmos')
+    _write_input_nc(comp_dir / 'atmos.197901-198312.ta.nc', 'ta', vertical_dim='lev')
+
+    report = cmor_check_subtool(yamlfile=yamlfile, check_dims=True)
+    dims = report['Amon']['files']['ta']['dims']
+    assert dims['status'] == 'ok'
+    assert dims['input_vertical_dim'] == 'alevel'
+    assert dims['mip_table_vertical_dims'] == ['alevel']
 
 
 def test_cmor_check_subtool_dims_unknown_when_no_files(temp_dir): # pylint: disable=redefined-outer-name
