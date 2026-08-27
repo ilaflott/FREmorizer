@@ -11,7 +11,7 @@ import yaml
 
 import pytest
 
-from fremor.cmor_config import cmor_config_subtool, _bronx_to_iso_chunk
+from fremor.cmor_config import cmor_config_subtool, _bronx_to_iso_chunk, _load_config_yaml
 
 @pytest.fixture
 def temp_dir():
@@ -230,3 +230,38 @@ def test_bronx_to_iso_chunk_cases():
     assert _bronx_to_iso_chunk('P5Y') == 'P5Y'
     with pytest.raises(ValueError, match='chunk must be ISO8601 like P5Y or bronx-style like 5yr, got 999999'):
         _bronx_to_iso_chunk('999999')
+
+
+def test_cmor_config_subtool_nocmip6plus_tables_err(temp_dir): # pylint: disable=redefined-outer-name
+    ''' cmip6plus filters on the MIP_*.json glob, distinct from the CMIP6/CMIP7 <era>_*.json one '''
+    pp_dir_targ = Path(temp_dir) / 'foobar'
+    mip_tables_targ = Path(temp_dir) / 'tables'
+    mip_era_targ = 'cmip6plus'
+    exp_config_targ = Path(temp_dir) / 'exp.json'
+    pp_dir_targ.mkdir(exist_ok=True, parents=True)
+    mip_tables_targ.mkdir(exist_ok=True, parents=True)
+    # a CMIP6-style name doesn't match the cmip6plus 'MIP_*.json' glob
+    (mip_tables_targ / 'CMIP6_Omon.json').write_text('{}', encoding='utf-8')
+    exp_config_targ.write_text(json.dumps({
+        'grid': 'native grid from exp config',
+        'nominal_resolution': '100 km',
+    }), encoding='utf-8')
+    with pytest.raises(ValueError,
+                       match=f'no MIP tables found in {mip_tables_targ} for era {mip_era_targ} after filtering'):
+        cmor_config_subtool(pp_dir=pp_dir_targ,
+                            mip_tables_dir=mip_tables_targ,
+                            mip_era=mip_era_targ,
+                            exp_config=exp_config_targ,
+                            output_yaml='',
+                            output_dir='',
+                            varlist_dir='',
+        )
+
+
+def test_load_config_yaml_rejects_yaml_without_cmor_section(temp_dir): # pylint: disable=redefined-outer-name
+    ''' _load_config_yaml is what fremor check/map use to resolve a self-contained yaml '''
+    bad_yaml = Path(temp_dir) / 'bad.yaml'
+    bad_yaml.write_text(yaml.safe_dump({'not_cmor': {}}), encoding='utf-8')
+
+    with pytest.raises(ValueError, match="expected a top-level mapping"):
+        _load_config_yaml(str(bad_yaml))
