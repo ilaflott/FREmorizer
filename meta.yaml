@@ -32,6 +32,7 @@ requirements:
 test:
   requires:
     - conda-forge::pytest
+    - conda-forge::pytest-asyncio
   source_files:
     - fremor/
   imports:
