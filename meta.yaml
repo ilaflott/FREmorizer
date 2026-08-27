@@ -27,6 +27,7 @@ requirements:
     - netcdf4>=1.7
     - numpy>=2
     - pyyaml
+    - textual
 
 test:
   requires:
