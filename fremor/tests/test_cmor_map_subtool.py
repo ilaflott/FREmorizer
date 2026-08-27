@@ -1600,3 +1600,159 @@ async def test_map_app_toggle_disabled_no_selection_warns(temp_dir): # pylint: d
         await pilot.pause()
 
         assert any('select' in message for message in notifications)
+
+
+# ── freq honoring ────────────────────────────────────────────────────────
+
+def test_mapsession_table_freq(temp_dir): # pylint: disable=redefined-outer-name
+    ''' table_freq reads the freq configured for a table_target straight out of the yaml '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir)
+    session = MapSession(yamlfile)
+    assert session.table_freq('Amon') == 'monthly'
+
+
+def test_mapsession_table_freq_none_when_unset(temp_dir): # pylint: disable=redefined-outer-name
+    ''' table_freq is None when the table_target's freq is unset in the yaml -- fremor yaml
+    then derives one from the MIP table itself (only for CMIP6-family eras), so freq-based
+    validation in the map UI is skipped rather than guessing '''
+    pp_dir, _, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _write_map_yaml(temp_dir, pp_dir, tables_dir, [_table_target('Amon', [], freq=None)])
+    session = MapSession(yamlfile)
+    assert session.table_freq('Amon') is None
+
+
+@pytest.mark.asyncio
+async def test_map_app_table_label_shows_freq(temp_dir): # pylint: disable=redefined-outer-name
+    ''' the MIP-table node's label surfaces its configured freq, since staging a mapping now
+    depends on it matching the selected pp file's freq '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir)
+    app = MapApp(MapSession(yamlfile))
+
+    async with app.run_test():
+        cmip_tree = app.query_one('#cmip_tree')
+        table_node = cmip_tree.root.children[0]
+        assert 'freq=monthly' in str(table_node.label)
+
+
+@pytest.mark.asyncio
+async def test_map_app_assign_mapping_blocked_on_freq_mismatch(temp_dir): # pylint: disable=redefined-outer-name
+    ''' pressing 'm' refuses to stage a mapping when the selected pp file lives under a freq
+    directory that doesn't match the table's configured freq -- fremor yaml would never
+    actually find the file there at CMORization time, so nothing is staged '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+
+    # Amon's table_target freq defaults to 'monthly', but this pp file lives under 'daily'
+    comp_ts_dir = Path(pp_dir) / 'atmos' / 'ts' / 'daily' / '5yr'
+    comp_ts_dir.mkdir(parents=True)
+    _write_nc_file(comp_ts_dir / 'atmos.000101-000512.pr.nc', 'pr', units='kg m-2 s-1')
+
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir, component_names=['atmos'])
+    session = MapSession(yamlfile)
+    app = MapApp(session)
+    out_path = Path(varlist_dir) / 'CMIP6_Amon_atmos.list'
+
+    async with app.run_test() as pilot:
+        cmip_tree = app.query_one('#cmip_tree')
+        table_node = cmip_tree.root.children[0]
+        unmapped_node = table_node.children[0]
+        pr_node = next(n for n in unmapped_node.children if n.data['var'] == 'pr')
+        app.on_tree_node_selected(_FakeTreeEvent(pr_node, 'cmip_tree'))
+
+        pp_tree = app.query_one('#pp_tree')
+        component_node = pp_tree.root.children[0]
+        app.on_tree_node_expanded(_FakeTreeEvent(component_node, 'pp_tree'))
+        freq_node = component_node.children[0]
+        assert freq_node.data['freq'] == 'daily'
+        app.on_tree_node_expanded(_FakeTreeEvent(freq_node, 'pp_tree'))
+        chunk_node = freq_node.children[0]
+        app.on_tree_node_expanded(_FakeTreeEvent(chunk_node, 'pp_tree'))
+        file_node = chunk_node.children[0]
+        app.on_tree_node_selected(_FakeTreeEvent(file_node, 'pp_tree'))
+        await pilot.pause()
+
+        notifications = []
+        app.notify = lambda message, **kwargs: notifications.append((message, kwargs.get('severity'))) # pylint: disable=protected-access
+
+        await pilot.press('m')
+        await pilot.pause()
+
+        assert not session.has_pending_changes
+        assert not out_path.exists()
+        assert any(sev == 'error' for _msg, sev in notifications)
+
+
+@pytest.mark.asyncio
+async def test_map_app_navigate_prefers_matching_freq(temp_dir): # pylint: disable=redefined-outer-name
+    ''' auto-navigating to a mapped variable's source, when the same local_key exists under
+    more than one freq, lands on the file under the table's configured freq -- not just
+    whichever one happens to be discovered first '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    (Path(varlist_dir) / 'CMIP6_Amon_atmos.list').write_text(
+        json.dumps({'t_ref': 'tas'}), encoding='utf-8'
+    )
+    monthly_dir = Path(pp_dir) / 'atmos' / 'ts' / 'monthly' / '5yr'
+    monthly_dir.mkdir(parents=True)
+    _write_nc_file(monthly_dir / 'atmos.000101-000512.t_ref.nc', 't_ref', units='K')
+    daily_dir = Path(pp_dir) / 'atmos' / 'ts' / 'daily' / '5yr'
+    daily_dir.mkdir(parents=True)
+    _write_nc_file(daily_dir / 'atmos.00010101-00051231.t_ref.nc', 't_ref', units='K')
+
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir, component_names=['atmos'])
+    app = MapApp(MapSession(yamlfile))
+
+    async with app.run_test() as pilot:
+        cmip_tree = app.query_one('#cmip_tree')
+        table_node = cmip_tree.root.children[0]
+        mapped_node = table_node.children[1]
+        source_node = next(n for n in mapped_node.children if n.data['var'] == 'tas')
+
+        notifications = []
+        app.notify = lambda message, **kwargs: notifications.append((message, kwargs.get('severity'))) # pylint: disable=protected-access
+
+        app.on_tree_node_selected(_FakeTreeEvent(source_node, 'cmip_tree'))
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert app.selected_pp['freq'] == 'monthly'
+        pp_tree = app.query_one('#pp_tree')
+        assert pp_tree.cursor_node.data['freq'] == 'monthly'
+        assert not notifications
+
+
+@pytest.mark.asyncio
+async def test_map_app_navigate_falls_back_to_mismatched_freq_with_warning(temp_dir): # pylint: disable=redefined-outer-name
+    ''' if the mapped variable's local_key doesn't exist anywhere under the table's
+    configured freq (a stale/hand-edited mapping), auto-navigation still finds the file under
+    a different freq for visibility, but warns clearly that fremor yaml won't actually use it '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    (Path(varlist_dir) / 'CMIP6_Amon_atmos.list').write_text(
+        json.dumps({'t_ref': 'tas'}), encoding='utf-8'
+    )
+    daily_dir = Path(pp_dir) / 'atmos' / 'ts' / 'daily' / '5yr'
+    daily_dir.mkdir(parents=True)
+    _write_nc_file(daily_dir / 'atmos.00010101-00051231.t_ref.nc', 't_ref', units='K')
+
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir, component_names=['atmos'])
+    app = MapApp(MapSession(yamlfile))
+
+    async with app.run_test() as pilot:
+        cmip_tree = app.query_one('#cmip_tree')
+        table_node = cmip_tree.root.children[0]
+        mapped_node = table_node.children[1]
+        source_node = next(n for n in mapped_node.children if n.data['var'] == 'tas')
+
+        notifications = []
+        app.notify = lambda message, **kwargs: notifications.append((message, kwargs.get('severity'))) # pylint: disable=protected-access
+
+        app.on_tree_node_selected(_FakeTreeEvent(source_node, 'cmip_tree'))
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert app.selected_pp['freq'] == 'daily'
+        pp_tree = app.query_one('#pp_tree')
+        assert pp_tree.cursor_node.data['freq'] == 'daily'
+        assert any(sev == 'warning' and 'freq' in msg for msg, sev in notifications)

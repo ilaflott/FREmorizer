@@ -24,6 +24,13 @@ component/local_key pp file -- automatically navigates the pp-directory browser 
 file, same as if the user had browsed there by hand. The pp-file detail box also lists every
 currently-loaded MIP table variable mapped to the selected pp file, alongside its preview.
 
+A table_target's ``freq`` (e.g. ``monthly``) is honored, not just displayed: it's the only
+freq subdirectory fremor yaml will actually read pp files from for that table at
+CMORization time, so staging a mapping ('m') from a pp file under a *different* freq is
+refused outright, and auto-navigating to an already-mapped variable's source prefers a file
+under the table's configured freq, falling back (with a warning) to a mismatched one only if
+that's all that exists.
+
 Mapping/clearing a variable only stages the change in memory -- nothing is written to disk
 until the user explicitly saves, so the tree doesn't collapse/re-categorize after every
 single edit while batching changes across many variables. The affected node is marked in
@@ -436,6 +443,16 @@ class MapSession:
                         mapped.append((table_name, cmip_var))
         return sorted(mapped)
 
+    def table_freq(self, table_name: str) -> Optional[str]:
+        """The freq configured for table_name's table_target (e.g. 'monthly') -- this is the
+        directory fremor yaml will actually read pp files from at CMORization time
+        (``{pp_dir}/{component}/{data_series_type}/{freq}/{chunk}``), regardless of which
+        freq subdirectory a pp file staged in this UI happens to live under. None if unset in
+        the yaml (fremor yaml then derives one from the MIP table itself, but only for
+        CMIP6-family eras) -- freq-based validation in the map UI is skipped in that case
+        rather than guessing."""
+        return self.table_targets_by_name[table_name].get('freq')
+
     def is_disabled(self, table_name: str) -> bool:
         """Whether table_name's table_target currently has its ``disabled`` flag set --
         reflects staged-but-unsaved toggle_disabled() calls immediately, since those mutate
@@ -711,7 +728,11 @@ class MapApp(App):
     # ---- cmip tree ----
 
     def _table_label(self, table_name: str, report: dict) -> str:
-        label = f'{table_name} ({report["reference_var_count"]} vars)'
+        label = f'{table_name} ({report["reference_var_count"]} vars'
+        table_freq = self.session.table_freq(table_name)
+        if table_freq:
+            label += f', freq={table_freq}'
+        label += ')'
         if self.session.is_disabled(table_name):
             label += '  (disabled)'
         pending = sum(1 for (t, _c, _k) in self.session.dirty_keys if t == table_name)
@@ -829,15 +850,30 @@ class MapApp(App):
                 usage_count = self.session.usage_count(data['component'], local_var)
                 node.add_leaf(
                     self._pp_file_label(nc_path, local_var, usage_count),
-                    data={'kind': 'file', 'path': nc_path,
-                          'component': data['component'], 'local_key': local_var})
+                    data={'kind': 'file', 'path': nc_path, 'component': data['component'],
+                          'local_key': local_var, 'freq': data['freq']})
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         if event.control.id != 'pp_tree':
             return
         self._ensure_pp_node_populated(event.node)
 
-    def _navigate_pp_tree_to(self, component: str, local_key: str) -> bool:
+    def _select_pp_tree_node(self, component_node, freq_node, chunk_node, file_node) -> None:
+        """Expand a pp_tree component/freq/chunk node chain and select its file_node leaf."""
+        tree = self.query_one('#pp_tree', Tree)
+        component_node.expand()
+        freq_node.expand()
+        chunk_node.expand()
+        # Tree.move_cursor (inside select_node) trusts file_node._line, which is only kept
+        # current by Tree's own on-idle rebuild -- accessing last_line forces that rebuild
+        # synchronously so the newly-expanded ancestors are accounted for before we jump the
+        # cursor to a child.
+        _ = tree.last_line
+        tree.select_node(file_node)
+        tree.scroll_to_node(file_node)
+
+    def _navigate_pp_tree_to(self, component: str, local_key: str,
+                             table_freq: Optional[str] = None) -> bool:
         """Expand and select the pp_tree leaf for (component, local_key), if such a pp file
         is discoverable on disk under pp_dir. Populates whatever component/freq/chunk nodes
         are needed along the way (bypassing the lazy on-expand population, since that only
@@ -845,8 +881,16 @@ class MapApp(App):
         message, so on_tree_node_selected picks it up and refreshes the preview box exactly
         as if the user had clicked it.
 
-        :return: True if the file was found and navigated to, False otherwise (e.g. it isn't
-            on disk, or the component directory itself isn't present under pp_dir).
+        If table_freq is given, a pp file living under that freq is preferred -- that's the
+        only freq directory fremor yaml will actually read from for this table at
+        CMORization time. If no such file exists but one with a matching local_key turns up
+        under a *different* freq, that's navigated to instead (so the source is still
+        visible) with a warning notification, since it isn't actually the file that will be
+        used at CMORization time.
+
+        :return: True if the file was found (under table_freq or, failing that, any freq)
+            and navigated to, False otherwise (e.g. it isn't on disk anywhere, or the
+            component directory itself isn't present under pp_dir).
         :rtype: bool
         """
         tree = self.query_one('#pp_tree', Tree)
@@ -857,23 +901,29 @@ class MapApp(App):
             return False
 
         self._ensure_pp_node_populated(component_node)
+        mismatched_fallback = None  # (freq_node, chunk_node, file_node) under a different freq
         for freq_node in component_node.children:
             self._ensure_pp_node_populated(freq_node)
             for chunk_node in freq_node.children:
                 self._ensure_pp_node_populated(chunk_node)
                 for file_node in chunk_node.children:
-                    if (file_node.data or {}).get('local_key') == local_key:
-                        component_node.expand()
-                        freq_node.expand()
-                        chunk_node.expand()
-                        # Tree.move_cursor (inside select_node) trusts file_node._line, which
-                        # is only kept current by Tree's own on-idle rebuild -- accessing
-                        # last_line forces that rebuild synchronously so the newly-expanded
-                        # ancestors are accounted for before we jump the cursor to a child.
-                        _ = tree.last_line
-                        tree.select_node(file_node)
-                        tree.scroll_to_node(file_node)
+                    if (file_node.data or {}).get('local_key') != local_key:
+                        continue
+                    if table_freq is None or (freq_node.data or {}).get('freq') == table_freq:
+                        self._select_pp_tree_node(component_node, freq_node, chunk_node, file_node)
                         return True
+                    if mismatched_fallback is None:
+                        mismatched_fallback = (freq_node, chunk_node, file_node)
+
+        if mismatched_fallback is not None:
+            freq_node, chunk_node, file_node = mismatched_fallback
+            self._select_pp_tree_node(component_node, freq_node, chunk_node, file_node)
+            self.notify(
+                f'{component}:{local_key} was only found under freq '
+                f'"{(freq_node.data or {}).get("freq")}", not this table\'s configured freq '
+                f'"{table_freq}" -- fremor yaml will not actually use this file at '
+                'CMORization time', severity='warning')
+            return True
         return False
 
     # ---- selection tracking ----
@@ -894,7 +944,8 @@ class MapApp(App):
             if kind == 'source':
                 # covers both a one-to-one mapping and one particular source of a
                 # multiply-mapped variable -- both carry component/local_key here.
-                found = self._navigate_pp_tree_to(data['component'], data['local_key'])
+                table_freq = self.session.table_freq(data['table'])
+                found = self._navigate_pp_tree_to(data['component'], data['local_key'], table_freq)
                 if not found:
                     self.notify(
                         f'pp file for {data["component"]}:{data["local_key"]} not found '
@@ -979,6 +1030,15 @@ class MapApp(App):
         cmip_var = self.selected_cmip['var']
         component = self.selected_pp['component']
         local_key = self.selected_pp['local_key']
+        table_freq = self.session.table_freq(table_name)
+        pp_freq = self.selected_pp.get('freq')
+        if table_freq and pp_freq and table_freq != pp_freq:
+            self.notify(
+                f'{table_name} is configured for freq "{table_freq}", but the selected pp '
+                f'file is under freq "{pp_freq}" -- fremor yaml would never actually find '
+                f'{local_key} there at CMORization time. Pick a pp file under "{table_freq}" '
+                'instead.', severity='error')
+            return
         self.session.set_mapping(table_name, component, local_key, cmip_var)
         self.notify(f'staged {local_key} ({component}) -> {cmip_var} in {table_name} '
                    "(press 's' to save)")

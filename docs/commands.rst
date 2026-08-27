@@ -196,6 +196,7 @@ workflows are supported. Available subcommands:
 * If there are unsaved staged changes, ``q`` warns first instead of quitting immediately; press ``q`` again to quit anyway and discard them, or ``s`` to save first
 * File previews use the ``ncinfo`` tool if it's found on PATH (or via ``--ncinfo_bin``), falling back to a plain netCDF4-based preview otherwise; previews load in a background thread (showing a loading message while they do) so the UI stays responsive, and switching to another file before a preview finishes discards the outdated result once it arrives
 * pp_dir, the MIP tables directory, the MIP era, and each component's variable list path are all derived from ``yamlfile``, the self-contained CMOR YAML written by ``fremor config`` — mapping edits are saved straight back into the variable list files referenced there
+* Each MIP table's configured ``freq`` (shown in its tree label) is enforced: staging a mapping from a pp file under a different freq subdirectory is refused, since ``fremor yaml`` would never actually read from there at CMORization time; auto-navigating to an already-mapped variable's source prefers a file under that freq too, falling back to a mismatched one (with a warning) only if that's all that exists
 * Minimal Syntax: ``fremor map -y [yamlfile] [TABLES...]``
 * Required Options:
    - ``-y, --yamlfile TEXT`` — Self-contained CMOR YAML file, as written by ``fremor config``
