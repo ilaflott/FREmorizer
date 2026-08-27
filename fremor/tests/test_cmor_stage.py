@@ -22,7 +22,8 @@ def _stage_case(tmp_path: Path, *, mip_era: str = 'CMIP6') -> tuple[Path, Path]:
     table_variables = {'tas': {}}
     if mip_era == 'CMIP7':
         table_variables = {'tas_tavg-u-hxy-u': {}}
-    (table_dir / f'{mip_era}_Amon.json').write_text(
+    table_prefix = 'MIP' if mip_era == 'CMIP6PLUS' else mip_era
+    (table_dir / f'{table_prefix}_Amon.json').write_text(
         json.dumps({'variable_entry': table_variables}), encoding='utf-8'
     )
     varlist.write_text(json.dumps({'temp': 'tas', 'unused': 'not_in_table'}), encoding='utf-8')
@@ -63,7 +64,7 @@ def _stage_case(tmp_path: Path, *, mip_era: str = 'CMIP6') -> tuple[Path, Path]:
     return yamlfile, input_dir
 
 
-@pytest.mark.parametrize('mip_era', ['CMIP6', 'CMIP7'])
+@pytest.mark.parametrize('mip_era', ['CMIP6', 'CMIP6PLUS', 'CMIP7'])
 def test_collect_stage_files_uses_mappings_bounds_and_ps(tmp_path, mip_era):
     """Only runnable mapped files and their same-date ps auxiliary are selected."""
     yamlfile, input_dir = _stage_case(tmp_path, mip_era=mip_era)
