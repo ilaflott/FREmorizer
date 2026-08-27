@@ -86,6 +86,7 @@ def _load_config_yaml(yamlfile: str) -> dict:
     :raises FileNotFoundError: If yamlfile, its pp_dir, or its table_dir do not exist.
     :raises ValueError: If yamlfile has no top-level ``cmor`` mapping.
     :return: dict with keys ``mip_era``, ``pp_dir``, ``mip_tables_dir``, ``table_targets``,
+        ``start``/``stop`` (the run's year bounds, as written in the yaml -- None if absent),
         ``yaml_doc`` (the fully parsed yaml document, for callers that need to write changes
         -- e.g. a disabled flag toggled in ``fremor map`` -- back to ``yamlfile``).
     :rtype: dict
@@ -116,6 +117,8 @@ def _load_config_yaml(yamlfile: str) -> dict:
         'pp_dir': pp_dir,
         'mip_tables_dir': mip_tables_dir,
         'table_targets': cmor_yaml_dict.get('table_targets') or [],
+        'start': cmor_yaml_dict.get('start'),
+        'stop': cmor_yaml_dict.get('stop'),
         'yaml_doc': yaml_doc,
     }
 
