@@ -379,8 +379,9 @@ def test_cmor_check_subtool_staging_missing_files(temp_dir): # pylint: disable=r
     assert report['Amon']['files']['tas']['staging']['status'] == 'missing'
 
 
-def test_cmor_check_subtool_staging_ok(temp_dir): # pylint: disable=redefined-outer-name
-    ''' check_staging: files present on a regular filesystem are reported as staged '''
+def test_cmor_check_subtool_staging_ok(temp_dir, capsys): # pylint: disable=redefined-outer-name
+    ''' check_staging: normal staged results remain in structured data but are hidden from
+    the human-readable report '''
     temp_root = Path(temp_dir)
     tables_dir = temp_root / 'tables'
     tables_dir.mkdir()
@@ -404,9 +405,10 @@ def test_cmor_check_subtool_staging_ok(temp_dir): # pylint: disable=redefined-ou
     assert staging['status'] == 'staged'
     assert staging['unstaged_files'] == []
     assert staging['gaps'] == []
+    assert 'staging=staged' not in capsys.readouterr().out
 
 
-def test_cmor_check_subtool_staging_gap_detection(temp_dir): # pylint: disable=redefined-outer-name
+def test_cmor_check_subtool_staging_gap_detection(temp_dir, capsys): # pylint: disable=redefined-outer-name
     ''' check_staging: a filename-only scan should catch a missing chunk between two others '''
     temp_root = Path(temp_dir)
     tables_dir = temp_root / 'tables'
@@ -429,9 +431,10 @@ def test_cmor_check_subtool_staging_gap_detection(temp_dir): # pylint: disable=r
 
     report = cmor_check_subtool(yamlfile=yamlfile, check_staging=True)
     assert report['Amon']['files']['tas']['staging']['gaps'] == ['1983-1990']
+    assert 'date-range gaps: 1983-1990' in capsys.readouterr().out
 
 
-def test_cmor_check_subtool_staging_dmls_offline(temp_dir, monkeypatch): # pylint: disable=redefined-outer-name
+def test_cmor_check_subtool_staging_dmls_offline(temp_dir, monkeypatch, capsys): # pylint: disable=redefined-outer-name
     ''' check_staging: when a dmls binary is available, its (OFL) tag marks a file unstaged '''
     temp_root = Path(temp_dir)
     tables_dir = temp_root / 'tables'
@@ -467,10 +470,12 @@ def test_cmor_check_subtool_staging_dmls_offline(temp_dir, monkeypatch): # pylin
     staging = report['Amon']['files']['tas']['staging']
     assert staging['status'] == 'unstaged'
     assert staging['unstaged_files'] == [str(nc_path)]
+    assert 'staging=unstaged' in capsys.readouterr().out
 
 
-def test_cmor_check_subtool_dims_ok(temp_dir): # pylint: disable=redefined-outer-name
-    ''' check_dims: input file's model-level dim ('lev') matches the table's 'alevel' '''
+def test_cmor_check_subtool_dims_ok(temp_dir, capsys): # pylint: disable=redefined-outer-name
+    ''' check_dims: a matching model-level dimension remains in structured data but is
+    hidden from the human-readable report '''
     temp_root = Path(temp_dir)
     tables_dir = temp_root / 'tables'
     tables_dir.mkdir()
@@ -488,15 +493,17 @@ def test_cmor_check_subtool_dims_ok(temp_dir): # pylint: disable=redefined-outer
 
     comp_dir = _input_dir(pp_dir, 'atmos')
     _write_input_nc(comp_dir / 'atmos.197901-198312.ta.nc', 'ta', vertical_dim='lev')
+    _write_input_nc(comp_dir / 'atmos.197901-198312.ps.nc', 'ps')
 
     report = cmor_check_subtool(yamlfile=yamlfile, check_dims=True)
     dims = report['Amon']['files']['ta']['dims']
     assert dims['status'] == 'ok'
     assert dims['input_vertical_dim'] == 'alevel'
     assert dims['mip_table_vertical_dims'] == ['alevel']
+    assert 'dims=ok' not in capsys.readouterr().out
 
 
-def test_cmor_check_subtool_dims_mismatch_plev_vs_alevel(temp_dir): # pylint: disable=redefined-outer-name
+def test_cmor_check_subtool_dims_mismatch_plev_vs_alevel(temp_dir, capsys): # pylint: disable=redefined-outer-name
     ''' check_dims: table wants fixed pressure levels but input is only on native model levels '''
     temp_root = Path(temp_dir)
     tables_dir = temp_root / 'tables'
@@ -521,6 +528,7 @@ def test_cmor_check_subtool_dims_mismatch_plev_vs_alevel(temp_dir): # pylint: di
     assert dims['status'] == 'vertical_dim_mismatch'
     assert dims['input_vertical_dim'] == 'alevel'
     assert dims['mip_table_vertical_dims'] == ['plev19']
+    assert 'dims=vertical_dim_mismatch' in capsys.readouterr().out
 
 
 def test_cmor_check_subtool_dims_missing_vertical(temp_dir): # pylint: disable=redefined-outer-name
@@ -574,7 +582,7 @@ def test_cmor_check_subtool_dims_unexpected_vertical(temp_dir): # pylint: disabl
     assert dims['status'] == 'unexpected_vertical_dim'
 
 
-def test_cmor_check_subtool_dims_missing_ps_file(temp_dir): # pylint: disable=redefined-outer-name
+def test_cmor_check_subtool_dims_missing_ps_file(temp_dir, capsys): # pylint: disable=redefined-outer-name
     ''' check_dims: a hybrid-sigma ('alevel') variable is missing its companion .ps.nc file '''
     temp_root = Path(temp_dir)
     tables_dir = temp_root / 'tables'
@@ -599,6 +607,9 @@ def test_cmor_check_subtool_dims_missing_ps_file(temp_dir): # pylint: disable=re
     dims = report['Amon']['files']['ta']['dims']
     assert dims['status'] == 'ok'
     assert dims['missing_ps_file'] == str(comp_dir / 'atmos.197901-198312.ps.nc')
+    output = capsys.readouterr().out
+    assert 'dims=ok' in output
+    assert 'missing companion ps file' in output
 
 
 def test_cmor_check_subtool_dims_ok_cmip7_list_dimensions(temp_dir): # pylint: disable=redefined-outer-name

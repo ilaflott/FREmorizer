@@ -623,7 +623,11 @@ def _print_report(report: dict, show_mapped: bool = False) -> None:
             for var in sorted(files):
                 var_entry = files[var]
                 staging = var_entry.get('staging')
-                if staging is not None:
+                staging_abnormal = (
+                    staging is not None and
+                    (staging['status'] != 'staged' or bool(staging['gaps']))
+                )
+                if staging_abnormal:
                     line = f'  FILES  {var}: staging={staging["status"]}'
                     if staging['unstaged_files']:
                         line += f' ({len(staging["unstaged_files"])} file(s) not yet staged)'
@@ -631,7 +635,11 @@ def _print_report(report: dict, show_mapped: bool = False) -> None:
                     if staging['gaps']:
                         click.echo(f'           date-range gaps: {", ".join(staging["gaps"])}')
                 dims = var_entry.get('dims')
-                if dims is not None:
+                dims_abnormal = (
+                    dims is not None and
+                    (dims['status'] != 'ok' or bool(dims.get('missing_ps_file')))
+                )
+                if dims_abnormal:
                     line = f'  FILES  {var}: dims={dims["status"]}'
                     if dims['status'] not in ('ok', 'unknown'):
                         line += (f' (table wants {dims.get("mip_table_vertical_dims")}, '
@@ -674,12 +682,13 @@ def cmor_check_subtool(
     :param check_staging: if True, for every one-to-one-mapped variable also check whether its
         input files exist under pp_dir and whether they're staged/disk-resident (best-effort,
         via ``dmls`` if available else a stat-only heuristic), plus a filename-only scan for
-        gaps between chunk date ranges.
+        gaps between chunk date ranges. The human-readable output omits normal results.
     :type check_staging: bool
     :param check_dims: if True, for every one-to-one-mapped variable also check whether a
         representative input file's vertical dimension matches what the MIP table declares
         (e.g. distinguishing ``alevel`` model-level output from ``plevNN`` pressure levels),
-        and whether hybrid-sigma variables have their companion ``.ps.nc`` file present.
+        and whether hybrid-sigma variables have their companion ``.ps.nc`` file present. The
+        human-readable output omits normal results.
     :type check_dims: bool
     :param dmls_bin: path to the dmls binary for the staging check. If omitted, looks for
         'dmls' on PATH; if not found either, falls back to a stat-only residency heuristic.

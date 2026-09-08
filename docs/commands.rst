@@ -175,8 +175,8 @@ workflows are supported. Available subcommands:
 * Optional:
    - ``TABLES`` — MIP table names to check, e.g. ``Amon``; shell-style wildcards supported (e.g. ``AER*``); defaults to every table in yamlfile's table_targets
    - ``--show_mapped`` — Also report variables mapped from exactly one component/diagnostic (one-to-one)
-   - ``--staging`` — For each one-to-one mapping, check whether its selected input files exist, appear disk-resident, and have gaps between date chunks; uses ``dmls`` when available and otherwise a stat-only heuristic
-   - ``--dims`` — For each one-to-one mapping, compare a representative input file's vertical dimension with the MIP-table definition and check for required hybrid-sigma ``ps`` companion files
+   - ``--staging`` — For each one-to-one mapping, check whether its selected input files exist, appear disk-resident, and have gaps between date chunks; uses ``dmls`` when available and otherwise a stat-only heuristic. Normal staged entries without gaps are omitted from the text output
+   - ``--dims`` — For each one-to-one mapping, compare a representative input file's vertical dimension with the MIP-table definition and check for required hybrid-sigma ``ps`` companion files. Normal matching entries are omitted from the text output
    - ``--dmls_bin TEXT`` — Path to the ``dmls`` executable used by ``--staging``; defaults to searching ``PATH``
    - ``--json`` — Print the report as JSON instead of a text summary
    - ``-o, --output_report TEXT`` — Optional path to also write the JSON report to
