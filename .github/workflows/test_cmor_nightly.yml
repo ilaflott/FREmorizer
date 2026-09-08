@@ -70,7 +70,8 @@ jobs:
             pyyaml \
             pytest \
             pytest-cov \
-            pytest-asyncio
+            pytest-asyncio \
+            textual
 
       - name: Show installed packages
         run: |
