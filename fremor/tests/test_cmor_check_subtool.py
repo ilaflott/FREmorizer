@@ -288,6 +288,31 @@ def test_cmor_check_subtool_table_patterns_filters_tables(temp_dir): # pylint: d
     assert set(report_all) == {'Amon', 'Lmon', 'AERmon'}
 
 
+def test_cmor_check_subtool_reports_startup_progress(temp_dir, capsys): # pylint: disable=redefined-outer-name
+    ''' progress is written to stderr from configuration load through per-table completion,
+    keeping stdout available for the report (especially valid --json output) '''
+    temp_root = Path(temp_dir)
+    tables_dir = temp_root / 'tables'
+    tables_dir.mkdir()
+    _write_amon_table(tables_dir, ['tas'])
+    varlist_dir = temp_root / 'varlists'
+    varlist_dir.mkdir()
+    varlist_path = varlist_dir / 'CMIP6_Amon_atmos.list'
+    varlist_path.write_text(json.dumps({'tas': 'tas'}), encoding='utf-8')
+    yamlfile = _write_yaml(temp_dir, [
+        _table_target('Amon', [_component_entry('atmos', varlist_path)])
+    ], table_dir=tables_dir)
+
+    cmor_check_subtool(yamlfile=yamlfile, json_output=True)
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)['Amon']['reference_var_count'] == 1
+    assert 'loading configuration' in captured.err
+    assert 'checking table 1/1 (Amon)' in captured.err
+    assert 'finished Amon in' in captured.err
+    assert 'complete in' in captured.err
+
+
 def test_cmor_check_subtool_table_patterns_no_match_err(temp_dir): # pylint: disable=redefined-outer-name
     ''' table_patterns matching nothing raises ValueError '''
     temp_root = Path(temp_dir)

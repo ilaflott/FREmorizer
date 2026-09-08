@@ -55,6 +55,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional, Sequence, Union
@@ -702,6 +703,8 @@ def cmor_check_subtool(
              (if check_staging or check_dims) 'files'.
     :rtype: dict
     """
+    started_at = time.monotonic()
+    click.echo('fremor check: loading configuration...', err=True)
     cmor_yaml_ctx = _load_config_yaml(yamlfile)
     mip_era = cmor_yaml_ctx['mip_era']
     pp_dir = cmor_yaml_ctx['pp_dir']
@@ -719,14 +722,54 @@ def cmor_check_subtool(
         raise ValueError(
             f'no table_targets in {yamlfile} matched table_patterns {list(table_patterns)}')
 
+    selected_table_targets = [
+        table_target for table_target in table_targets
+        if table_target['table_name'] in table_names
+    ]
+    varlist_count = sum(
+        len(table_target.get('target_components') or [])
+        for table_target in selected_table_targets
+    )
+    click.echo(
+        f'fremor check: loading {varlist_count} variable list(s) for '
+        f'{len(table_names)} MIP table(s)...',
+        err=True,
+    )
+    if check_staging:
+        click.echo(
+            'fremor check: staging checks query archive metadata for each mapped variable; '
+            'dmls and network filesystems may respond slowly...',
+            err=True,
+        )
+    if check_dims:
+        click.echo(
+            'fremor check: dimension checks open one NetCDF header per mapped variable...',
+            err=True,
+        )
     table_paths = _mip_table_paths(mip_tables_dir, mip_era, table_names)
-    varlists_by_table = _varlists_by_table_from_yaml(table_targets)
+    # Restrict reads to selected tables. On archive/network filesystems, loading unrelated
+    # varlists was a significant and entirely avoidable part of startup time.
+    varlists_by_table = _varlists_by_table_from_yaml(selected_table_targets)
     table_targets_by_name = {
-        table_target['table_name']: table_target for table_target in table_targets
+        table_target['table_name']: table_target for table_target in selected_table_targets
     }
 
     report = {}
-    for table_name in table_names:
+    for index, table_name in enumerate(table_names, start=1):
+        check_detail = 'mapping coverage'
+        if check_staging or check_dims:
+            enabled_checks = []
+            if check_staging:
+                enabled_checks.append('staging')
+            if check_dims:
+                enabled_checks.append('dimensions')
+            check_detail += f' and {"/".join(enabled_checks)} input-file checks'
+        click.echo(
+            f'fremor check: checking table {index}/{len(table_names)} '
+            f'({table_name}): {check_detail}...',
+            err=True,
+        )
+        table_started_at = time.monotonic()
         table_entry = _build_table_report(
             table_paths[table_name], mip_era, varlists_by_table, show_mapped=show_mapped,
             pp_dir=pp_dir, table_target=table_targets_by_name.get(table_name),
@@ -734,6 +777,11 @@ def cmor_check_subtool(
             start=start, stop=stop
         )
         report[table_entry.pop('table_name')] = table_entry
+        click.echo(
+            f'fremor check: finished {table_name} in '
+            f'{time.monotonic() - table_started_at:.1f}s',
+            err=True,
+        )
 
     if json_output:
         click.echo(json.dumps(report, indent=2))
@@ -745,4 +793,5 @@ def cmor_check_subtool(
             json.dump(report, handle, indent=2)
         fre_logger.info('wrote check report to %s', output_report)
 
+    click.echo(f'fremor check: complete in {time.monotonic() - started_at:.1f}s', err=True)
     return report

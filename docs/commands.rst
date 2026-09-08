@@ -169,6 +169,7 @@ workflows are supported. Available subcommands:
 
 * Cross-references per-component varlist files against MIP table JSON files and reports, per MIP table: variables required by the table but not mapped from any component (unmapped), variables mapped from more than one component/diagnostic (multiply-mapped), and mapped values that don't correspond to any variable actually defined in that table (unknown / likely typos)
 * pp_dir, the MIP tables directory, the MIP era, and each component's variable list path are all derived from ``yamlfile``, the self-contained CMOR YAML written by ``fremor config`` — no separate directory/era flags are needed
+* Startup and per-table progress, including elapsed timings, is written to stderr so long archive/network-filesystem checks remain visibly active without corrupting ``--json`` output
 * Minimal Syntax: ``fremor check -y [yamlfile] [TABLES...]``
 * Required Options:
    - ``-y, --yamlfile TEXT`` — Self-contained CMOR YAML file, as written by ``fremor config``
@@ -188,6 +189,7 @@ workflows are supported. Available subcommands:
 -------
 
 * Opens an interactive terminal UI to review and edit variable-mapping varlist files
+* Reports configuration/varlist loading before launching the UI, then displays an in-UI loading message while MIP reports, tree nodes, and pp components are initialized
 * Shows each selected MIP table as a tree of variables alongside their mapping status (unmapped / mapped / multiply-mapped / unknown), and lets you browse time-series files under ``pp_dir`` to assign or fix a mapping
 * Selecting a MIP variable shows its own MIP-table definition (such as long name, units, dimensions, and cell methods); CMIP7 variables with multiple brands show each matching definition
 * A box above the pp browser always shows the currently-selected CMIP variable (and its current source, if reassigning an existing mapping)

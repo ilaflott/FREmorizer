@@ -81,10 +81,12 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 from collections import defaultdict, namedtuple
 from pathlib import Path
 from typing import Optional, Sequence
 
+import click
 import yaml
 from netCDF4 import Dataset
 from textual import work
@@ -754,6 +756,11 @@ class MapApp(App):
 
     NO_CMIP_DETAIL = 'select a CMIP variable to see its MIP table definition'
 
+    STARTUP_MESSAGE = (
+        'Loading MIP table reports and scanning pp components...\n'
+        'Large tables and archive/network filesystems may take a while.'
+    )
+
     def __init__(self, session: MapSession):
         super().__init__()
         self.session = session
@@ -781,7 +788,7 @@ class MapApp(App):
         with Horizontal():
             with Vertical(id='cmip_pane'):
                 yield Tree('MIP Tables', id='cmip_tree')
-                yield Static(self.NO_CMIP_DETAIL, id='cmip_detail')
+                yield Static(self.STARTUP_MESSAGE, id='cmip_detail')
             with Vertical(id='pp_pane'):
                 yield Static(self.NO_CMIP_SELECTION, id='selected_cmip')
                 yield Tree(self.session.pp_dir, id='pp_tree')
@@ -804,9 +811,11 @@ class MapApp(App):
         self.query_one('#cmip_detail', Static).update(
             _format_variable_detail(data['var'], definitions))
 
-    def on_mount(self) -> None:
+    def on_ready(self) -> None:
+        """Populate after Textual paints its first frame so the loading message is visible."""
         self._populate_cmip_tree()
         self._populate_pp_root()
+        self.query_one('#cmip_detail', Static).update(self.NO_CMIP_DETAIL)
 
     # ---- cmip tree ----
 
@@ -1288,5 +1297,12 @@ def cmor_map_subtool(
     :return: None
     :rtype: None
     """
+    started_at = time.monotonic()
+    click.echo('fremor map: loading configuration and variable lists...', err=True)
     session = MapSession(yamlfile, table_patterns, ncinfo_bin, dmls_bin)
+    click.echo(
+        f'fremor map: loaded {len(session.table_names)} MIP table(s) in '
+        f'{time.monotonic() - started_at:.1f}s; starting interface...',
+        err=True,
+    )
     MapApp(session).run()

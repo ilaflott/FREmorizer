@@ -735,6 +735,28 @@ class _FakeTreeEvent: # pylint: disable=too-few-public-methods
 
 
 @pytest.mark.asyncio
+async def test_map_app_shows_startup_message_while_building_tree( # pylint: disable=redefined-outer-name
+        temp_dir, monkeypatch):
+    ''' the first painted frame explains the synchronous table/tree work instead of showing
+    an apparently frozen empty interface '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir)
+    app = MapApp(MapSession(yamlfile))
+    messages_seen_while_loading = []
+    original_populate = app._populate_cmip_tree # pylint: disable=protected-access
+
+    def _record_loading_message():
+        messages_seen_while_loading.append(str(app.query_one('#cmip_detail').content))
+        original_populate()
+
+    monkeypatch.setattr(app, '_populate_cmip_tree', _record_loading_message)
+
+    async with app.run_test():
+        assert messages_seen_while_loading == [MapApp.STARTUP_MESSAGE]
+        assert str(app.query_one('#cmip_detail').content) == MapApp.NO_CMIP_DETAIL
+
+
+@pytest.mark.asyncio
 async def test_map_app_mip_tree_nodes_are_collapsed_by_default(temp_dir): # pylint: disable=redefined-outer-name
     ''' MIP tables and each status category start collapsed so expanding the tree is always
     an explicit user action '''
