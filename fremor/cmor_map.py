@@ -838,8 +838,19 @@ class MapApp(App):
             return base_label + self.PENDING_SUFFIX
         return base_label
 
-    def _populate_cmip_tree(self) -> None:
+    def _populate_cmip_tree(self, preserve_table_expansion: bool = False) -> None:
+        """Rebuild the MIP tree with status categories collapsed.
+
+        On initial population (and ordinary refreshes), table nodes are collapsed too. A
+        save may preserve the table nodes the user opened while still collapsing their
+        Unmapped, Mapped, Multiply-mapped, and Unknown children.
+        """
         tree = self.query_one('#cmip_tree', Tree)
+        expanded_tables = {
+            (node.data or {}).get('table')
+            for node in tree.root.children
+            if preserve_table_expansion and node.is_expanded
+        }
         tree.root.remove_children()
         self.table_nodes = {}
         # Keep both groups alphabetical, but make active tables the first thing users see.
@@ -853,12 +864,12 @@ class MapApp(App):
             table_node = tree.root.add(
                 self._table_label(table_name, report),
                 data={'kind': 'table', 'table': table_name},
-                expand=True,
+                expand=table_name in expanded_tables,
             )
             self.table_nodes[table_name] = table_node
 
             unmapped_node = table_node.add(
-                f'Unmapped ({len(report["unmapped"])})', data={'kind': 'branch'}, expand=True)
+                f'Unmapped ({len(report["unmapped"])})', data={'kind': 'branch'})
             for var in report['unmapped']:
                 unmapped_node.add_leaf(var, data={'kind': 'var', 'table': table_name, 'var': var})
 
@@ -883,7 +894,7 @@ class MapApp(App):
                               'component': comp, 'local_key': key})
 
             unknown_node = table_node.add(
-                f'Unknown ({len(report["unknown_mapped"])})', data={'kind': 'branch'}, expand=True)
+                f'Unknown ({len(report["unknown_mapped"])})', data={'kind': 'branch'})
             for val in report['unknown_mapped']:
                 sources = report['unknown_sources'].get(val, [])
                 val_node = unknown_node.add(
@@ -1222,7 +1233,7 @@ class MapApp(App):
             return
         saved_count = self.session.save_pending()
         self.notify(f'saved {saved_count} staged change(s)')
-        self._populate_cmip_tree()
+        self._populate_cmip_tree(preserve_table_expansion=True)
 
     def action_refresh_tree(self) -> None:
         self._populate_cmip_tree()

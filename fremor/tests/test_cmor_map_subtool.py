@@ -735,6 +735,45 @@ class _FakeTreeEvent: # pylint: disable=too-few-public-methods
 
 
 @pytest.mark.asyncio
+async def test_map_app_mip_tree_nodes_are_collapsed_by_default(temp_dir): # pylint: disable=redefined-outer-name
+    ''' MIP tables and each status category start collapsed so expanding the tree is always
+    an explicit user action '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir)
+    app = MapApp(MapSession(yamlfile))
+
+    async with app.run_test():
+        table_node = app.query_one('#cmip_tree').root.children[0]
+
+        assert not table_node.is_expanded
+        assert all(not status_node.is_expanded for status_node in table_node.children)
+
+
+@pytest.mark.asyncio
+async def test_map_app_save_preserves_open_tables_but_collapses_status_nodes(temp_dir): # pylint: disable=redefined-outer-name
+    ''' saving keeps an opened MIP table visible while collapsing its four status-category
+    children after the tree is rebuilt '''
+    pp_dir, varlist_dir, tables_dir = _make_session_fixture(temp_dir)
+    yamlfile = _amon_yaml(temp_dir, pp_dir, varlist_dir, tables_dir, component_names=['atmos'])
+    session = MapSession(yamlfile)
+    app = MapApp(session)
+
+    async with app.run_test() as pilot:
+        table_node = app.query_one('#cmip_tree').root.children[0]
+        table_node.expand()
+        for status_node in table_node.children:
+            status_node.expand()
+        session.set_mapping('Amon', 'atmos', 'precip', 'pr')
+
+        await pilot.press('s')
+        await pilot.pause()
+
+        rebuilt_table_node = app.query_one('#cmip_tree').root.children[0]
+        assert rebuilt_table_node.is_expanded
+        assert all(not status_node.is_expanded for status_node in rebuilt_table_node.children)
+
+
+@pytest.mark.asyncio
 async def test_map_app_assign_mapping(temp_dir): # pylint: disable=redefined-outer-name
     ''' pressing 'm' only stages the mapping in memory (dirty-marks the node in place,
     doesn't touch disk or rebuild the tree); pressing 's' afterward saves it '''
