@@ -530,6 +530,11 @@ class MapSession:
         the table_target dict in place."""
         return bool(self.table_targets_by_name[table_name].get('disabled'))
 
+    def is_saved_disabled(self, table_name: str) -> bool:
+        """Whether table_name was disabled as of the last save. Unlike ``is_disabled()``,
+        this deliberately ignores staged toggles so the tree order only changes on save."""
+        return self._baseline_disabled[table_name]
+
     def toggle_disabled(self, table_name: str) -> bool:
         """Flip table_name's ``disabled`` flag in memory, staging the change until
         save_pending() writes it back to the cmor yaml. Toggling back to the last-saved
@@ -811,13 +816,16 @@ class MapApp(App):
         if table_freq:
             label += f', freq={table_freq}'
         label += ')'
-        if self.session.is_disabled(table_name):
+        disabled = self.session.is_disabled(table_name)
+        if disabled:
             label += '  (disabled)'
         pending = sum(1 for (t, _c, _k) in self.session.dirty_keys if t == table_name)
         if table_name in self.session.disabled_dirty:
             pending += 1
         if pending:
             label += f' -- {pending} unsaved'
+        if disabled:
+            label = f'[dim italic]{label}[/dim italic]'
         return label
 
     def _source_label(self, base_label: str, table_name: str, component: str,
@@ -834,7 +842,13 @@ class MapApp(App):
         tree = self.query_one('#cmip_tree', Tree)
         tree.root.remove_children()
         self.table_nodes = {}
-        for table_name in self.session.table_names:
+        # Keep both groups alphabetical, but make active tables the first thing users see.
+        # Use the last-saved state so staged toggles don't move a table out from under the
+        # user's cursor; the new position takes effect when the toggle is saved.
+        for table_name in sorted(
+            self.session.table_names,
+            key=lambda name: (self.session.is_saved_disabled(name), name),
+        ):
             report = self.session.table_report(table_name)
             table_node = tree.root.add(
                 self._table_label(table_name, report),
@@ -1178,6 +1192,8 @@ class MapApp(App):
         new_state = self.session.toggle_disabled(table_name)
         self.notify(f"staged {'disabling' if new_state else 're-enabling'} {table_name} "
                    "(press 's' to save)")
+        # Reflect the staged state in the label immediately, but preserve the tree order
+        # until action_save_pending rebuilds it after persisting the change.
         self._refresh_table_pending_label(table_name)
         self._quit_confirmed = False
 

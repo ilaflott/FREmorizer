@@ -1699,6 +1699,70 @@ async def test_map_app_toggle_disabled_key(temp_dir): # pylint: disable=redefine
 
 
 @pytest.mark.asyncio
+async def test_map_app_disabled_tables_are_dimmed_and_sorted_last(temp_dir): # pylint: disable=redefined-outer-name
+    ''' enabled and disabled table groups are each alphabetical, with disabled tables
+    visually subdued at the bottom of the MIP tree '''
+    pp_dir, _, tables_dir = _make_session_fixture(temp_dir)
+    _write_table(tables_dir, 'Lmon', ['mrso'])
+    _write_table(tables_dir, 'Omon', ['tos'])
+    amon = _table_target('Amon', [])
+    amon['disabled'] = True
+    yamlfile = _write_map_yaml(temp_dir, pp_dir, tables_dir, [
+        amon,
+        _table_target('Omon', []),
+        _table_target('Lmon', []),
+    ])
+    app = MapApp(MapSession(yamlfile))
+
+    async with app.run_test():
+        cmip_tree = app.query_one('#cmip_tree')
+        table_nodes = cmip_tree.root.children
+
+        assert [node.data['table'] for node in table_nodes] == ['Lmon', 'Omon', 'Amon']
+        assert not table_nodes[0].label.spans
+        assert not table_nodes[1].label.spans
+        assert any('dim' in str(span.style) and 'italic' in str(span.style)
+                   for span in table_nodes[2].label.spans)
+
+
+@pytest.mark.asyncio
+async def test_map_app_toggling_disabled_reorders_table_tree_only_after_save(temp_dir): # pylint: disable=redefined-outer-name
+    ''' a staged disabled toggle leaves the table in its saved-order position, including
+    across refreshes, and only moves it below enabled tables once saved '''
+    pp_dir, _, tables_dir = _make_session_fixture(temp_dir)
+    _write_table(tables_dir, 'Lmon', ['mrso'])
+    yamlfile = _write_map_yaml(temp_dir, pp_dir, tables_dir, [
+        _table_target('Amon', []),
+        _table_target('Lmon', []),
+    ])
+    session = MapSession(yamlfile)
+    app = MapApp(session)
+
+    async with app.run_test() as pilot:
+        cmip_tree = app.query_one('#cmip_tree')
+        amon_node = cmip_tree.root.children[0]
+        app.on_tree_node_selected(_FakeTreeEvent(amon_node, 'cmip_tree'))
+
+        await pilot.press('t')
+        await pilot.pause()
+
+        assert session.is_disabled('Amon') is True
+        assert [node.data['table'] for node in cmip_tree.root.children] == ['Amon', 'Lmon']
+        assert any('dim' in str(span.style) for span in amon_node.label.spans)
+
+        await pilot.press('r')
+        await pilot.pause()
+
+        assert [node.data['table'] for node in cmip_tree.root.children] == ['Amon', 'Lmon']
+
+        await pilot.press('s')
+        await pilot.pause()
+
+        assert [node.data['table'] for node in cmip_tree.root.children] == ['Lmon', 'Amon']
+        assert any('dim' in str(span.style) for span in cmip_tree.root.children[1].label.spans)
+
+
+@pytest.mark.asyncio
 async def test_map_app_toggle_disabled_from_variable_selection(temp_dir): # pylint: disable=redefined-outer-name
     ''' 't' also works with a variable/source node selected (not just the table node itself)
     -- it toggles whichever table that variable belongs to '''
