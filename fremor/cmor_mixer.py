@@ -42,6 +42,7 @@ from .cmor_helpers import ( from_ds_get_this, create_lev_bnds,
                             normalize_calendar, get_time_calendar_value, calendars_are_equivalent,
                             resolve_mip_era_table_resource )
 from .cmor_tripolar import load_tripolar_grid
+from .cmor_validate import check_exp_config_required_attributes
 from .cmor_constants import ( ACCEPTED_VERT_DIMS, NON_HYBRID_SIGMA_COORDS, ALT_HYBRID_SIGMA_COORDS,
                               DEPTH_COORDS, CMOR_NC_FILE_ACTION, CMOR_VERBOSITY,
                               CMOR_EXIT_CTL, CMOR_EXIT_CTL_BY_ERA, CMOR_MK_SUBDIRS, CMOR_LOG,
@@ -958,6 +959,11 @@ def cmor_run_subtool(indir: str = None,
             f'  experiment mip_era: {exp_cfg_mip_era}\n'
             f'  table format detected in {json_table_config}: {table_mip_era}\n'
             '  supply a MIP table that matches the experiment mip_era.')
+
+    # CHECK the exp config against the CV before any CMORization work happens. this runs after the
+    # grid/calendar updates above so it sees what CMOR will actually see -- the cmor yaml's gridding
+    # block is written into the exp config there, and can blank out fields the user filled in.
+    check_exp_config_required_attributes(json_exp_config, json_table_config)
     mip_fullvar_list = mip_var_cfgs['variable_entry'].keys()
     fre_logger.debug('the following variables were read from the table: %s', mip_fullvar_list)
 

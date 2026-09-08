@@ -334,6 +334,27 @@ keeping the output focused on components that actually have data that can be cmo
 Common Issues and Solutions
 ---------------------------
 
+``fremor run`` Stops on ``does not satisfy the controlled vocabulary``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Before any CMORization work begins, ``fremor`` checks the experiment configuration against the
+``required_global_attributes`` list in the controlled vocabulary CMOR will load, and stops if any
+of them is missing or left blank. Attributes CMOR supplies itself (``creation_date``,
+``tracking_id``, ``variable_id``, the CMIP7 brand components, and so on) are exempt.
+
+A blank value is treated exactly like a missing one, because CMOR discards empty attributes
+outright — so ``"grid": ""`` never reaches the output file, and without this check it surfaces
+much later as a per-variable ``Please set attribute: "grid" in your input file`` from
+``cmor_write``.
+
+The fix is to fill the listed fields in the experiment config. The exception is ``grid``,
+``grid_label`` and ``nominal_resolution``: those are rewritten from the ``gridding:`` block of the
+cmor YAML on every run, so set them there instead — or remove the ``gridding:`` block to leave the
+experiment config untouched.
+
+The check is skipped, with a warning, when the CV cannot be found or parsed; CMOR reports that
+case itself.
+
 ``fremor resolve`` Fails at YAML Combination Step
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -487,4 +508,4 @@ Tips
 * Increase verbosity when debugging — use ``-v`` to see ``INFO`` logging, and ``-vv`` (or ``-v -v``) for ``DEBUG`` logging
 * Version control your YAML files — track changes to your CMORization configuration and commit them to git!
 * Check controlled vocabulary — verify grid labels and nominal resolutions are CV-compliant
-* Review experiment config — ensure all required metadata fields are populated
+* Review experiment config — ensure all required metadata fields are populated; ``fremor run`` verifies this against the CV before starting and names every unfilled field at once
