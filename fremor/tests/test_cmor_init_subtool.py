@@ -9,6 +9,7 @@ Tests the cmor_init_subtool and its helper functions including:
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -245,6 +246,28 @@ def test_cmor_init_cmip6plus_exp_config_points_at_cmip6plus_resources(tmp_path):
     assert config['license'].startswith('CMIP6Plus model data produced by')
     assert 'pcmdi.llnl.gov/CMIP6Plus/TermsOfUse' in config['license']
     assert 'further_info_url' not in config['license']
+
+
+@pytest.mark.parametrize('mip_era', ['cmip6', 'cmip6plus', 'cmip7'])
+def test_cmor_init_exp_config_outpath_is_relative(tmp_path, mip_era):
+    """
+    Every template must ship a relative, non-empty outpath.
+
+    fremor chdir's into <outdir>/CMOR_tmp/ before running CMOR and recovers the final
+    destination by stripping '/CMOR_tmp/' from the path cmor.close() returns, so an absolute
+    outpath escapes that relocation and --outdir is silently ignored. An empty string is
+    fatal outright: CMOR warns the directory does not exist, then its (non-recursive) mkdir('')
+    fails and cmor.dataset_json raises.
+    """
+    exp_config = tmp_path / f'{mip_era}_experiment.json'
+
+    cmor_init_subtool(mip_era=mip_era, exp_config=str(exp_config), tables_dir=None)
+
+    with open(exp_config, encoding='utf-8') as f:
+        outpath = json.load(f)['outpath']
+
+    assert outpath, 'an empty outpath makes cmor.dataset_json fail on mkdir("")'
+    assert not Path(outpath).is_absolute()
 
 
 def test_cmor_init_tables_dir_only_no_exp_config(tmp_path):
