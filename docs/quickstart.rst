@@ -72,6 +72,25 @@ MIP Era Differences
   updated table definitions. Choose this for new submissions that follow CMIP6-era
   conventions but target the newer consolidated table infrastructure.
 
+  Two CMIP6Plus quirks are worth knowing, both handled for you by
+  ``fremor init -m cmip6plus``:
+
+  - Its variable tables are named ``MIP_<table>.json`` and live in ``Tables/``,
+    while the coordinate, formula-terms and grids tables live one level up in
+    ``Auxillary_files/``. CMOR resolves those relative to the table it is loading,
+    so the generated config points at ``../Auxillary_files/MIP_coordinate.json``
+    and friends.
+  - The controlled vocabulary is *not* in the table repository. ``CMIP6Plus_CV.json``
+    comes from `WCRP-CMIP/CMIP6Plus_CVs <https://github.com/WCRP-CMIP/CMIP6Plus_CVs>`_;
+    ``fremor init`` downloads it into the fetched ``Tables/`` directory alongside
+    the MIP tables.
+
+  One rough edge remains upstream: ``Auxillary_files/MIP_grids.json`` ships without a
+  ``Header``, so CMOR cannot select it as a table. Tripolar ocean components therefore
+  need a grids table that declares one — copy ``CMIP6_grids.json`` from
+  `pcmdi/cmip6-cmor-tables <https://github.com/pcmdi/cmip6-cmor-tables>`_ next to your
+  MIP tables and ``fremor`` will pick it up. Rectilinear output is unaffected.
+
 * **CMIP7** — The next-generation CMIP Phase 7 tables from
   `WCRP-CMIP/cmip7-cmor-tables <https://github.com/WCRP-CMIP/cmip7-cmor-tables>`_.
   CMIP7 uses a distinct experiment configuration template with fields tailored to the
@@ -99,7 +118,7 @@ Required user inputs
   example experiment configuration files for each MIP era:
 
   * **CMIP6**: `CMIP6_input_example.json <https://github.com/PCMDI/cmip6-cmor-tables/blob/main/Tables/CMIP6_input_example.json>`_
-  * **CMIP6Plus**: `CMOR_input_example.json <https://github.com/PCMDI/mip-cmor-tables/blob/main/src/exploration/old/CMOR_input_example.json>`_
+  * **CMIP6Plus**: `my_input.json <https://github.com/PCMDI/mip-cmor-tables/blob/main/src/exploration/old/my_input.json>`_
   * **CMIP7**: `cmor_test.py (lines 9–41) <https://github.com/WCRP-CMIP/cmip7-cmor-tables/blob/main/scripts/cmor_test.py#L9-L41>`_
     and `CMOR_input_example.json (PCMDI/cmor) <https://github.com/PCMDI/cmor/blob/9d82dfb7c091cd0e0366fffd8a50f4d17f85f4a6/Test/CMOR_input_example.json>`_
 

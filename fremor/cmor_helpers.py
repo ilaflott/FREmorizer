@@ -30,6 +30,7 @@ Functions
 - ``update_grid_and_label(json_file_path, new_grid_label, new_grid, new_nom_res, output_file_path)``
 - ``update_calendar_type(json_file_path, new_calendar_type, output_file_path)``
 - ``check_path_existence(some_path)``
+- ``resolve_mip_era_table_resource(json_table_config, mip_era, resource)``
 - ``iso_to_bronx_chunk(cmor_chunk_in)``
 - ``conv_mip_to_bronx_freq(cmor_table_freq)``
 - ``get_bronx_freq_from_mip_table(json_table_config)``
@@ -54,7 +55,8 @@ import numpy as np
 from netCDF4 import Dataset, Variable
 
 from .cmor_constants import ( ARCHIVE_GOLD_DATA_DIR, CMIP7_GOLD_OCEAN_FILE_STUB, # CMIP6_GOLD_OCEAN_FILE_STUB,
-                              INPUT_TO_MIP_VERT_DIM )
+                              INPUT_TO_MIP_VERT_DIM,
+                              MIP_ERA_RESOURCES, MIP_ERA_RESOURCE_FALLBACKS )
 
 fre_logger = logging.getLogger(__name__)
 
@@ -433,6 +435,93 @@ def get_vertical_dimension( ds: Dataset,
                 continue
             vert_dim = dim
     return vert_dim
+
+
+def resolve_mip_era_table_resource(json_table_config: str,
+                                   mip_era: str,
+                                   resource: str) -> str:
+    """
+    Locate an auxiliary CMOR table that belongs with ``json_table_config``.
+
+    CMOR resolves the CV, coordinate and formula-terms tables relative to the directory of
+    the MIP table being loaded (``cmor_load_table`` builds ``dirname(<table>)/<name>``), so
+    the grids table is looked up the same way here. Where a table repo keeps its auxiliary
+    tables in a sibling directory -- CMIP6Plus's ``mip-cmor-tables`` puts them in
+    ``Auxillary_files/`` while the variable tables live in ``Tables/`` -- the name carries the
+    ``../`` prefix, exactly as it must in the experiment config.
+
+    :param json_table_config: Path to the MIP table CMOR is loading.
+    :type json_table_config: str
+    :param mip_era: MIP era of the experiment config, e.g. 'CMIP6', 'CMIP6PLUS', 'CMIP7'.
+    :type mip_era: str
+    :param resource: Which resource to resolve: 'cv', 'coordinate', 'formula_terms' or 'grids'.
+    :type resource: str
+    :raises ValueError: If mip_era or resource is not recognized.
+    :raises FileNotFoundError: If no candidate name exists next to the MIP table.
+    :return: Absolute path to the resource.
+    :rtype: str
+    """
+    era = mip_era.upper()
+    if era not in MIP_ERA_RESOURCES:
+        raise ValueError(f'unrecognized mip_era = {mip_era}. '
+                         f'expected one of {sorted(MIP_ERA_RESOURCES)}')
+    if resource not in MIP_ERA_RESOURCES[era]:
+        raise ValueError(f'unrecognized resource = {resource}. '
+                         f'expected one of {sorted(MIP_ERA_RESOURCES[era])}')
+
+    table_dir = Path(json_table_config).parent
+    candidates = [MIP_ERA_RESOURCES[era][resource]]
+    candidates += [ cand
+                    for cand in MIP_ERA_RESOURCE_FALLBACKS.get(era, {}).get(resource, [])
+                    if cand not in candidates ]
+
+    tried, unusable = [], []
+    for candidate in candidates:
+        candidate_path = table_dir / candidate
+        tried.append(str(candidate_path))
+        if not candidate_path.exists():
+            continue
+        # cmor.set_table() only accepts a table that declares Header/table_id; without it CMOR
+        # fails with the opaque "Invalid table: N , not loaded yet!". mip-cmor-tables ships its
+        # grids table with no Header at all, so keep looking when that is what we found.
+        if resource == 'grids' and not _table_declares_table_id(candidate_path):
+            unusable.append(str(candidate_path))
+            fre_logger.warning('%s declares no Header/table_id, so cmor.set_table cannot use it. '
+                               'looking for another %s table.', candidate_path, resource)
+            continue
+        fre_logger.info('resolved %s %s table: %s', era, resource, candidate_path)
+        return str(candidate_path.resolve())
+
+    message = (f'could not find a usable {era} {resource} table alongside {json_table_config}.\n'
+               '  tried:\n    ' + '\n    '.join(tried) + '\n')
+    if unusable:
+        message += ('  found but unusable (no Header/table_id):\n    '
+                    + '\n    '.join(unusable) + '\n')
+    if era == 'CMIP6PLUS' and resource == 'grids':
+        message += ('  PCMDI/mip-cmor-tables ships no grids table CMOR can set: its\n'
+                    '  Auxillary_files/MIP_grids.json has no Header. Copy CMIP6_grids.json from\n'
+                    '  pcmdi/cmip6-cmor-tables next to your MIP tables -- fremor processes\n'
+                    '  CMIP6Plus as a CMIP6 case, and its projected-grid axes are the same.\n')
+    else:
+        message += f'  check that your MIP tables are a complete {era} table set.\n'
+    raise FileNotFoundError(message)
+
+
+def _table_declares_table_id(table_path: Path) -> bool:
+    """
+    Return True if a CMOR table JSON declares ``Header/table_id``.
+
+    :param table_path: Path to the table JSON.
+    :type table_path: Path
+    :return: Whether the table can be handed to ``cmor.set_table``.
+    :rtype: bool
+    """
+    try:
+        with open(table_path, 'r', encoding='utf-8') as table_file:
+            return bool(json.load(table_file).get('Header', {}).get('table_id'))
+    except (OSError, ValueError) as exc:
+        fre_logger.warning('could not read %s (%s)', table_path, exc)
+        return False
 
 
 def create_tmp_dir( outdir: str,

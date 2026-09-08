@@ -110,9 +110,9 @@ _CMIP6PLUS_EXP_CONFIG_DATA = {
     'grid': 'FOO_BAR_PLACEHOLD',
     'grid_label': 'gr',
     'nominal_resolution': '10000 km',
-    'license': 'CMIP6 model data produced by Lawrence Livermore PCMDI is licensed under a Creative Commons Attribution 4.0 International License (https://creativecommons.org/licenses/by/4.0/). Consult https://pcmdi.llnl.gov/CMIP6/TermsOfUse for terms of use governing CMIP6 output, including citation requirements and proper acknowledgment. Further information about this data, including some limitations, can be found via the further_info_url (recorded as a global attribute in this file) and at https:///pcmdi.llnl.gov/. The data producers and data providers make no warranty, either express or implied, including, but not limited to, warranties of merchantability and fitness for a particular purpose. All liabilities arising from the supply of the information (including any liability arising in negligence) are excluded to the fullest extent permitted by law.',
+    'license': 'CMIP6Plus model data produced by PCMDI is licensed under a Creative Commons Attribution 4.0 International License (https://creativecommons.org/licenses/by/4.0/). Consult https://pcmdi.llnl.gov/CMIP6Plus/TermsOfUse for terms of use governing CMIP6Plus output, including citation requirements and proper acknowledgment. The data producers and data providers make no warranty, either express or implied, including, but not limited to, warranties of merchantability and fitness for a particular purpose. All liabilities arising from the supply of the information (including any liability arising in negligence) are excluded to the fullest extent permitted by law.',
     '#output': 'Root directory for output (can be either a relative or full path)',
-    'outpath': 'CMIP6',
+    'outpath': 'CMIP6Plus',
     'contact ': 'Python Coder (coder@a.b.c.com)',
     'history': 'Output from archivcl_A1.nce/giccm_03_std_2xCO2_2256.',
     'comment': '',
@@ -120,9 +120,12 @@ _CMIP6PLUS_EXP_CONFIG_DATA = {
     'sub_experiment': 'none',
     'institution': '',
     'source': 'PCMDI-test 1.0 (1989)',
-    '_controlled_vocabulary_file': 'CMIP6_CV.json',
-    '_AXIS_ENTRY_FILE': 'CMIP6PLUS_coordinate.json',
-    '_FORMULA_VAR_FILE': 'CMIP6PLUS_formula_terms.json',
+    # CMOR resolves these relative to the MIP table's directory; PCMDI/mip-cmor-tables keeps
+    # its auxiliary tables in Auxillary_files/, a sibling of Tables/, and ships no CV
+    # (CMIP6Plus_CV.json comes from WCRP-CMIP/CMIP6Plus_CVs).
+    '_controlled_vocabulary_file': 'CMIP6Plus_CV.json',
+    '_AXIS_ENTRY_FILE': '../Auxillary_files/MIP_coordinate.json',
+    '_FORMULA_VAR_FILE': '../Auxillary_files/MIP_formula_terms.json',
     '_cmip6_option': 'CMIP6',
     'mip_era': 'CMIP6Plus',
     'parent_mip_era': 'no parent',

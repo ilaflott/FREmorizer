@@ -65,6 +65,7 @@ Additional Resources
 * `CMIP6Plus / MIP Tables <https://github.com/PCMDI/mip-cmor-tables>`_
 * `CMIP7 Tables <https://github.com/WCRP-CMIP/cmip7-cmor-tables>`_
 * `CMIP6 Controlled Vocabulary <https://github.com/WCRP-CMIP/CMIP6_CVs>`_
+* `CMIP6Plus Controlled Vocabulary <https://github.com/WCRP-CMIP/CMIP6Plus_CVs>`_ (not shipped with the CMIP6Plus tables)
 * `PCMDI CMOR User Guide <http://cmor.llnl.gov/>`_
 * `fremor on GitHub <https://github.com/NOAA-GFDL/fremor>`_
 * `fre-cli (upstream) <https://github.com/NOAA-GFDL/fre-cli>`_

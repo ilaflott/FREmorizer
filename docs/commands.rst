@@ -23,6 +23,7 @@ workflows are supported. Available subcommands:
 
 * Initializes CMOR resources by generating experiment configuration templates and/or fetching MIP tables
 * Fetches tables from trusted GitHub repositories (CMIP6: ``PCMDI/cmip6-cmor-tables``, CMIP6Plus: ``PCMDI/mip-cmor-tables``, CMIP7: ``WCRP-CMIP/cmip7-cmor-tables``)
+* For CMIP6Plus, also fetches ``CMIP6Plus_CV.json`` from ``WCRP-CMIP/CMIP6Plus_CVs`` into the fetched ``Tables/`` directory, since the CMIP6Plus table repository ships no controlled vocabulary
 * Minimal Syntax: ``fremor init -m [mip_era] [options]``
 * Required Options:
    - ``-m, --mip_era TEXT`` — MIP era: ``cmip6``, ``cmip6plus``, or ``cmip7``

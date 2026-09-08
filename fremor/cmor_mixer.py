@@ -39,11 +39,12 @@ from .cmor_helpers import ( from_ds_get_this, create_lev_bnds,
                             get_iso_datetime_ranges, check_dataset_for_ocean_grid, get_vertical_dimension,
                             create_tmp_dir, get_json_file_data, update_grid_and_label,
                             update_calendar_type, filter_brands,
-                            normalize_calendar, get_time_calendar_value, calendars_are_equivalent )
+                            normalize_calendar, get_time_calendar_value, calendars_are_equivalent,
+                            resolve_mip_era_table_resource )
 from .cmor_tripolar import load_tripolar_grid
 from .cmor_constants import ( ACCEPTED_VERT_DIMS, NON_HYBRID_SIGMA_COORDS, ALT_HYBRID_SIGMA_COORDS,
                               DEPTH_COORDS, CMOR_NC_FILE_ACTION, CMOR_VERBOSITY,
-                              CMOR_EXIT_CTL, CMOR_MK_SUBDIRS, CMOR_LOG,
+                              CMOR_EXIT_CTL, CMOR_EXIT_CTL_BY_ERA, CMOR_MK_SUBDIRS, CMOR_LOG,
                               CMOR_LAT_AXIS_NAME, CMOR_LON_AXIS_NAME )
 
 fre_logger = logging.getLogger(__name__)
@@ -275,10 +276,17 @@ def rewrite_netcdf_file_var( mip_var_cfgs: dict = None,
     # CMOR's own error messages (e.g. "Problem with 'cmor.variable'.") are content-free unless
     # a logfile is configured; without one, the real reason for a CMORError is discarded.
     cmor_logfile = CMOR_LOG if CMOR_LOG is not None else f'cmor_{target_var}.log'
+    # exit control is per-era: CMIP6Plus tables always warn (see CMOR_EXIT_CTL_BY_ERA)
+    cmor_exit_ctl = CMOR_EXIT_CTL_BY_ERA.get(exp_cfg_mip_era, CMOR_EXIT_CTL)
+    fre_logger.debug('cmor exit_control for %s = %s', exp_cfg_mip_era, cmor_exit_ctl)
     cmor.setup(
+        # CMOR falls back to inpath when a table's neighbours are not where it first looks.
+        # The CMIP6Plus auxiliary tables sit in Auxillary_files/, so loading one from there
+        # would otherwise leave CMOR hunting for the CV in the wrong directory.
+        inpath=str(Path(json_table_config).parent),
         netcdf_file_action=CMOR_NC_FILE_ACTION,
         set_verbosity=CMOR_VERBOSITY,
-        exit_control=CMOR_EXIT_CTL,
+        exit_control=cmor_exit_ctl,
         create_subdirectories=CMOR_MK_SUBDIRS,
         logfile=cmor_logfile
     )
@@ -295,7 +303,7 @@ def rewrite_netcdf_file_var( mip_var_cfgs: dict = None,
     # if ocean tripolar grid, we need the CMIP grids configuration file. load it but don't set the table yet.
     json_grids_config, loaded_cmor_grids_cfg = None, None
     if process_tripolar_data:
-        json_grids_config = f'{Path(json_table_config).parent}/{exp_cfg_mip_era}_grids.json'
+        json_grids_config = resolve_mip_era_table_resource(json_table_config, exp_cfg_mip_era, 'grids')
         fre_logger.info('cmor is loading/opening %s', json_grids_config)
         loaded_cmor_grids_cfg = cmor.load_table(json_grids_config)
         cmor.set_table(loaded_cmor_grids_cfg)
@@ -936,12 +944,13 @@ def cmor_run_subtool(indir: str = None,
 
     mip_var_cfgs = get_json_file_data(json_table_config)
     table_mip_era = mip_var_cfgs.get('Header', {}).get('mip_era')
+    table_name_prefix = Path(json_table_config).stem.split('_', maxsplit=1)[0].upper()
     if isinstance(table_mip_era, str):
         table_mip_era = table_mip_era.upper()
-    elif Path(json_table_config).stem.split('_', maxsplit=1)[0].upper() in ['CMIP6', 'CMIP6PLUS', 'CMIP7']:
-        table_mip_era = Path(json_table_config).stem.split('_', maxsplit=1)[0].upper()
-        if table_mip_era == 'MIP':
-            table_mip_era = 'CMIP6PLUS'
+    elif table_name_prefix in ['CMIP6', 'CMIP6PLUS', 'CMIP7', 'MIP']:
+        # CMIP6Plus tables (PCMDI/mip-cmor-tables) are named MIP_<table>.json, so the bare
+        # 'MIP' prefix identifies a CMIP6Plus table set.
+        table_mip_era = 'CMIP6PLUS' if table_name_prefix == 'MIP' else table_name_prefix
 
     if table_mip_era is not None and table_mip_era != exp_cfg_mip_era:
         raise ValueError(

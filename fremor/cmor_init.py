@@ -12,13 +12,18 @@ This module powers the ``fremor init`` command, providing two key capabilities:
 2. **MIP table retrieval** – fetches the official MIP tables from trusted
    GitHub repositories. By default tables are fetched via ``git clone``
    (shallow, depth 1); with ``--fast`` they are fetched as a tarball via
-   ``curl`` and extracted in-place.
+   ``curl`` and extracted in-place. CMIP6Plus additionally gets its controlled
+   vocabulary, which lives in a different repository than its tables.
 
 Trusted sources
 ---------------
 - CMIP6:     https://github.com/PCMDI/cmip6-cmor-tables
 - CMIP6Plus: https://github.com/PCMDI/mip-cmor-tables
 - CMIP7:     https://github.com/WCRP-CMIP/cmip7-cmor-tables
+
+CMIP6Plus controlled vocabulary (not shipped with its tables)
+-------------------------------------------------------------
+- https://github.com/WCRP-CMIP/CMIP6Plus_CVs
 
 Functions
 ---------
@@ -31,6 +36,8 @@ import subprocess
 import tarfile
 import tempfile
 from pathlib import Path
+
+from .cmor_constants import MIP_ERA_RESOURCES, CMIP6PLUS_CV_URL
 
 fre_logger = logging.getLogger(__name__)
 
@@ -85,9 +92,9 @@ def _cmip6_exp_config_template():
         'sub_experiment': 'none',
         'institution': 'NOAA-GFDL',
         'source': '',
-        '_controlled_vocabulary_file': 'CMIP6_CV.json',
-        '_AXIS_ENTRY_FILE': 'CMIP6_coordinate.json',
-        '_FORMULA_VAR_FILE': 'CMIP6_formula_terms.json',
+        '_controlled_vocabulary_file': MIP_ERA_RESOURCES['CMIP6']['cv'],
+        '_AXIS_ENTRY_FILE': MIP_ERA_RESOURCES['CMIP6']['coordinate'],
+        '_FORMULA_VAR_FILE': MIP_ERA_RESOURCES['CMIP6']['formula_terms'],
         '_cmip6_option': 'CMIP6',
         'mip_era': 'CMIP6',
         'parent_mip_era': 'no parent',
@@ -106,9 +113,18 @@ def _cmip6_exp_config_template():
     }
 
 def _cmip6plus_exp_config_template():
-    """ return a template for CMIP6Plus. currently, near-identical to object returned for cmip6 """
+    """
+    return a template for CMIP6Plus.
+
+    the ``_``-prefixed keys point CMOR at the CMIP6Plus controlled vocabulary and auxiliary
+    tables. CMOR resolves all three relative to the directory holding the MIP table being
+    loaded (cmor_load_table builds ``dirname(<table>)/<name>``), and PCMDI/mip-cmor-tables
+    keeps its auxiliary tables in ``Auxillary_files/`` alongside ``Tables/`` -- hence the
+    ``../`` prefixes. the CMIP6Plus CV is not shipped with the MIP tables; it lives in
+    WCRP-CMIP/CMIP6Plus_CVs and must be placed next to the tables by the user.
+    """
     return {
-        '#note': ' **** CMIP6 experiment configuration template – fill in values below ****',
+        '#note': ' **** CMIP6Plus experiment configuration template – fill in values below ****',
         'source_type': '',
         'experiment_id': '',
         'activity_id': '',
@@ -132,7 +148,7 @@ def _cmip6plus_exp_config_template():
         'grid': '',
         'grid_label': '',
         'nominal_resolution': '',
-        'license': 'CMIP6 model data produced by Lawrence Livermore NOAA-GFDL is licensed under a Creative Commons Attribution 4.0 International License (https://creativecommons.org/licenses/by/4.0/). Consult https://pcmdi.llnl.gov/CMIP6/TermsOfUse for terms of use governing CMIP6 output, including citation requirements and proper acknowledgment. Further information about this data, including some limitations, can be found via the further_info_url (recorded as a global attribute in this file) and at https:///pcmdi.llnl.gov/. The data producers and data providers make no warranty, either express or implied, including, but not limited to, warranties of merchantability and fitness for a particular purpose. All liabilities arising from the supply of the information (including any liability arising in negligence) are excluded to the fullest extent permitted by law.', # pylint: disable=line-too-long
+        'license': 'CMIP6Plus model data produced by NOAA-GFDL is licensed under a Creative Commons Attribution 4.0 International License (https://creativecommons.org/licenses/by/4.0/). Consult https://pcmdi.llnl.gov/CMIP6Plus/TermsOfUse for terms of use governing CMIP6Plus output, including citation requirements and proper acknowledgment. The data producers and data providers make no warranty, either express or implied, including, but not limited to, warranties of merchantability and fitness for a particular purpose. All liabilities arising from the supply of the information (including any liability arising in negligence) are excluded to the fullest extent permitted by law.', # pylint: disable=line-too-long
         'outpath': '',
         'contact': '',
         'history': '',
@@ -141,9 +157,15 @@ def _cmip6plus_exp_config_template():
         'sub_experiment': 'none',
         'institution': 'NOAA-GFDL',
         'source': '',
-        '_controlled_vocabulary_file': 'CMIP6_CV.json',
-        '_AXIS_ENTRY_FILE': 'CMIP6_coordinate.json',
-        '_FORMULA_VAR_FILE': 'CMIP6_formula_terms.json',
+        # CMOR looks for these three relative to the MIP table directory. supply
+        # CMIP6Plus_CV.json from WCRP-CMIP/CMIP6Plus_CVs; the coordinate/formula tables ship
+        # with PCMDI/mip-cmor-tables under Auxillary_files/, one level up from Tables/.
+        '_controlled_vocabulary_file': MIP_ERA_RESOURCES['CMIP6PLUS']['cv'],
+        '_AXIS_ENTRY_FILE': MIP_ERA_RESOURCES['CMIP6PLUS']['coordinate'],
+        '_FORMULA_VAR_FILE': MIP_ERA_RESOURCES['CMIP6PLUS']['formula_terms'],
+        # CMOR only tests whether _cmip6_option is present, never its value; presence enables
+        # the CMIP6-style CV checks (source_id, experiment, grids, parent/sub experiment ids),
+        # which CMIP6Plus still uses. keep it.
         '_cmip6_option': 'CMIP6',
         'mip_era': 'CMIP6Plus',
         'parent_mip_era': 'no parent',
@@ -217,9 +239,9 @@ def _cmip7_exp_config_template():
             '<variable_id><branding_suffix><frequency><region>'
             '<grid_label><source_id><experiment_id><variant_label>'
         ),
-        '_controlled_vocabulary_file': '../tables-cvs/cmor-cvs.json',
-        '_AXIS_ENTRY_FILE': 'CMIP7_coordinate.json',
-        '_FORMULA_VAR_FILE': 'CMIP7_formula_terms.json',
+        '_controlled_vocabulary_file': MIP_ERA_RESOURCES['CMIP7']['cv'],
+        '_AXIS_ENTRY_FILE': MIP_ERA_RESOURCES['CMIP7']['coordinate'],
+        '_FORMULA_VAR_FILE': MIP_ERA_RESOURCES['CMIP7']['formula_terms'],
     }
 
 
@@ -289,6 +311,53 @@ def _fetch_tables_curl(repo_url, tables_dir, tag=None):
     fre_logger.info('MIP tables extracted to %s', tables_dir)
 
 
+def _fetch_cmip6plus_cv(tables_dir):
+    """
+    Fetch ``CMIP6Plus_CV.json`` and drop it next to the CMIP6Plus MIP tables.
+
+    PCMDI/mip-cmor-tables ships no controlled vocabulary; the CMIP6Plus CV is maintained
+    separately in WCRP-CMIP/CMIP6Plus_CVs. CMOR looks for the CV named in the experiment
+    config's ``_controlled_vocabulary_file`` in the directory of the MIP table it loads, so
+    the CV is written into the ``Tables`` directory of the freshly fetched table set.
+
+    Parameters
+    ----------
+    tables_dir : str
+        Directory the MIP tables were fetched into.
+
+    Returns
+    -------
+    str or None
+        Path to the CV that was written, or *None* if it could not be fetched.
+    """
+    tables_path = Path(tables_dir)
+
+    # `git clone` puts Tables/ at the top; the --fast tarball nests it one level down
+    candidate_dirs = [tables_path / 'Tables'] + sorted(tables_path.glob('*/Tables'))
+    target_dirs = [candidate for candidate in candidate_dirs if candidate.is_dir()]
+    if not target_dirs:
+        fre_logger.warning(
+            'no Tables directory found under %s, skipping the CMIP6Plus CV fetch. '
+            'download %s by hand and place it alongside your MIP tables.',
+            tables_dir, CMIP6PLUS_CV_URL)
+        return None
+
+    target = target_dirs[0] / 'CMIP6Plus_CV.json'
+    curl_cmd = ['curl', '-L', '--fail', '-o', str(target), CMIP6PLUS_CV_URL]
+    fre_logger.info('fetching the CMIP6Plus controlled vocabulary: %s', ' '.join(curl_cmd))
+    try:
+        subprocess.run(curl_cmd, check=True)
+    except (subprocess.CalledProcessError, OSError) as exc:
+        target.unlink(missing_ok=True)
+        fre_logger.warning(
+            'could not fetch the CMIP6Plus CV (%s). download %s by hand and place it in %s, '
+            'or point _controlled_vocabulary_file at your own copy.',
+            exc, CMIP6PLUS_CV_URL, target_dirs[0])
+        return None
+
+    fre_logger.info('CMIP6Plus controlled vocabulary written to %s', target)
+    return str(target)
+
 # ---------------------------------------------------------------------------
 # Main subtool entry-point
 # ---------------------------------------------------------------------------
@@ -310,7 +379,8 @@ def cmor_init_subtool(
       *exp_config* nor *tables_dir* is provided — in which case a default
       filename is used).
     * Clone / download the official MIP tables into *tables_dir* when that
-      argument is provided.
+      argument is provided. For CMIP6Plus the controlled vocabulary, which the
+      table repo does not ship, is fetched alongside them.
 
     Parameters
     ----------
@@ -330,14 +400,15 @@ def cmor_init_subtool(
     Returns
     -------
     dict
-        A dictionary with keys ``'exp_config'`` (path written or *None*)
-        and ``'tables_dir'`` (path written or *None*).
+        A dictionary with keys ``'exp_config'`` (path written or *None*),
+        ``'tables_dir'`` (path written or *None*) and ``'cv_file'`` (path of the
+        CMIP6Plus CV fetched alongside the tables, or *None*).
     """
     mip_era_lower = mip_era.lower()
     if mip_era_lower not in ('cmip6', 'cmip6plus', 'cmip7'):
         raise ValueError(f'mip_era must be cmip6, cmip6plus, or cmip7, got {mip_era}')
 
-    result = {'exp_config': None, 'tables_dir': None}
+    result = {'exp_config': None, 'tables_dir': None, 'cv_file': None}
 
     if exp_config is None and tables_dir is None: # create a default user exp json
         exp_config = f'CMOR_{mip_era_lower}_template.json'
@@ -350,6 +421,11 @@ def cmor_init_subtool(
         else:
             _fetch_tables_git(repo_url, tables_dir, tag=tag)
         result['tables_dir'] = tables_dir
+
+        # the CMIP6Plus CV is not part of the CMIP6Plus table repo; fetch it so the
+        # _controlled_vocabulary_file written into the config template resolves.
+        if mip_era_lower == 'cmip6plus':
+            result['cv_file'] = _fetch_cmip6plus_cv(tables_dir)
 
     # -- experiment config --
     # Write config when explicitly requested OR when tables_dir is not given
