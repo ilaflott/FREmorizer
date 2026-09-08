@@ -288,6 +288,45 @@ def test_cmor_check_subtool_table_patterns_filters_tables(temp_dir): # pylint: d
     assert set(report_all) == {'Amon', 'Lmon', 'AERmon'}
 
 
+def test_cmor_check_subtool_skips_disabled_tables(temp_dir, capsys): # pylint: disable=redefined-outer-name
+    ''' disabled table targets are excluded even when explicitly selected, and their MIP
+    table and varlist files are never read '''
+    temp_root = Path(temp_dir)
+    tables_dir = temp_root / 'tables'
+    tables_dir.mkdir()
+    _write_table(tables_dir, 'Lmon', ['mrso'])
+    varlist_dir = temp_root / 'varlists'
+    varlist_dir.mkdir()
+    lmon_list = varlist_dir / 'CMIP6_Lmon_land.list'
+    lmon_list.write_text(json.dumps({'soil_moist': 'mrso'}), encoding='utf-8')
+    disabled_amon = _table_target(
+        'Amon', [_component_entry('atmos', varlist_dir / 'missing-ignored.list')]
+    )
+    disabled_amon['disabled'] = True
+    yamlfile = _write_yaml(temp_dir, [
+        disabled_amon,
+        _table_target('Lmon', [_component_entry('land', lmon_list)]),
+    ], table_dir=tables_dir)
+
+    report = cmor_check_subtool(yamlfile=yamlfile, table_patterns=['Amon', 'Lmon'])
+
+    assert set(report) == {'Lmon'}
+    assert 'skipping 1 disabled MIP table' in capsys.readouterr().err
+
+
+def test_cmor_check_subtool_all_disabled_returns_empty_report(temp_dir): # pylint: disable=redefined-outer-name
+    ''' selecting only disabled table targets is a successful no-op rather than trying to
+    validate their files or reporting a pattern-match error '''
+    temp_root = Path(temp_dir)
+    tables_dir = temp_root / 'tables'
+    tables_dir.mkdir()
+    disabled_amon = _table_target('Amon', [])
+    disabled_amon['disabled'] = True
+    yamlfile = _write_yaml(temp_dir, [disabled_amon], table_dir=tables_dir)
+
+    assert cmor_check_subtool(yamlfile=yamlfile, table_patterns=['Amon']) == {}
+
+
 def test_cmor_check_subtool_reports_startup_progress(temp_dir, capsys): # pylint: disable=redefined-outer-name
     ''' progress is written to stderr from configuration load through per-table completion,
     keeping stdout available for the report (especially valid --json output) '''

@@ -183,6 +183,9 @@ def collect_stage_files(yamlfile: str, start: Optional[str] = None,
 
     input_files: set[Path] = set()
     for table_target in stage_config.document.get('table_targets') or []:
+        if table_target.get('disabled'):
+            fre_logger.info('skipping disabled MIP table %s', table_target.get('table_name'))
+            continue
         table_name = table_target['table_name']
         table_path = (stage_config.table_dir /
                      f'{_table_json_prefix(stage_config.mip_era)}_{table_name}.json')

@@ -82,6 +82,7 @@ workflows are supported. Available subcommands:
 ---------
 
 * Discovers the mapped NetCDF inputs selected by a self-contained CMOR YAML file and submits them in one ``dmget`` invocation
+* Skips MIP table targets marked ``disabled: true``
 * Deduplicates files referenced by multiple table targets and includes existing same-date ``ps`` auxiliary files
 * Uses the YAML ``start``/``stop`` bounds unless they are overridden on the command line
 * Minimal Syntax: ``fremor stage -y [yamlfile] [options]``
@@ -168,6 +169,7 @@ workflows are supported. Available subcommands:
 ---------
 
 * Cross-references per-component varlist files against MIP table JSON files and reports, per MIP table: variables required by the table but not mapped from any component (unmapped), variables mapped from more than one component/diagnostic (multiply-mapped), and mapped values that don't correspond to any variable actually defined in that table (unknown / likely typos)
+* Skips MIP table targets marked ``disabled: true``, including their optional staging and dimension checks
 * pp_dir, the MIP tables directory, the MIP era, and each component's variable list path are all derived from ``yamlfile``, the self-contained CMOR YAML written by ``fremor config`` — no separate directory/era flags are needed
 * Startup and per-table progress, including elapsed timings, is written to stderr so long archive/network-filesystem checks remain visibly active without corrupting ``--json`` output
 * Minimal Syntax: ``fremor check -y [yamlfile] [TABLES...]``

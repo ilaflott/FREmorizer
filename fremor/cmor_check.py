@@ -698,9 +698,9 @@ def cmor_check_subtool(
         table_target's MIP table JSON file is missing.
     :raises ValueError: if yamlfile has no table_targets, none of the given table_patterns
         match any table_target, or yamlfile's ``start``/``stop`` isn't a four-digit year.
-    :return: table_name -> report dict, with keys 'reference_var_count', 'unmapped',
+    :return: enabled table_name -> report dict, with keys 'reference_var_count', 'unmapped',
              'multiply_mapped', 'unknown_mapped', (if show_mapped) 'one_to_one_mapped', and
-             (if check_staging or check_dims) 'files'.
+             (if check_staging or check_dims) 'files'. Disabled table targets are omitted.
     :rtype: dict
     """
     started_at = time.monotonic()
@@ -717,15 +717,25 @@ def cmor_check_subtool(
     if not all_table_names:
         raise ValueError(f'no table_targets found in {yamlfile}')
 
-    table_names = _select_table_names(all_table_names, table_patterns)
-    if not table_names:
+    requested_table_names = _select_table_names(all_table_names, table_patterns)
+    if not requested_table_names:
         raise ValueError(
             f'no table_targets in {yamlfile} matched table_patterns {list(table_patterns)}')
 
     selected_table_targets = [
         table_target for table_target in table_targets
-        if table_target['table_name'] in table_names
+        if table_target['table_name'] in requested_table_names and
+        not table_target.get('disabled')
     ]
+    table_names = sorted({
+        table_target['table_name'] for table_target in selected_table_targets
+    })
+    disabled_count = len(requested_table_names) - len(table_names)
+    if disabled_count:
+        click.echo(
+            f'fremor check: skipping {disabled_count} disabled MIP table(s)',
+            err=True,
+        )
     varlist_count = sum(
         len(table_target.get('target_components') or [])
         for table_target in selected_table_targets

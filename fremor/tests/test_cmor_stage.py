@@ -107,6 +107,38 @@ def test_stage_dry_run_does_not_invoke_dmget(tmp_path):
     run_mock.assert_not_called()
 
 
+def test_collect_stage_files_skips_disabled_tables(tmp_path):
+    """Disabled table targets contribute no files and aren't validated."""
+    yamlfile, input_dir = _stage_case(tmp_path)
+    yaml_doc = yaml.safe_load(yamlfile.read_text(encoding='utf-8'))
+    yaml_doc['cmor']['table_targets'].insert(0, {
+        'table_name': 'MissingDisabledTable',
+        'disabled': True,
+        'target_components': [{
+            'component_name': 'missing_component',
+            'data_series_type': 'ts',
+            'chunk': 'P5Y',
+            'variable_list': str(tmp_path / 'missing-disabled-varlist.json'),
+        }],
+    })
+    yamlfile.write_text(yaml.safe_dump(yaml_doc, sort_keys=False), encoding='utf-8')
+
+    result = collect_stage_files(str(yamlfile))
+
+    assert result == sorted([
+        str((input_dir / 'atmos.199501-199912.ps.nc').resolve()),
+        str((input_dir / 'atmos.199501-199912.temp.nc').resolve()),
+    ])
+
+
+def test_collect_stage_files_all_disabled_returns_empty_selection(tmp_path):
+    """An all-disabled configuration performs no staging discovery."""
+    yamlfile, _ = _stage_case(tmp_path)
+    _rewrite_yaml(yamlfile, lambda cmor: cmor['table_targets'][0].update(disabled=True))
+
+    assert collect_stage_files(str(yamlfile)) == []
+
+
 def test_collect_stage_files_rejects_invalid_year(tmp_path):
     """Invalid year bounds fail before invoking dmget."""
     yamlfile, _ = _stage_case(tmp_path)
