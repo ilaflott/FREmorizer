@@ -69,7 +69,8 @@ jobs:
             "numpy>=2" \
             pyyaml \
             pytest \
-            pytest-cov
+            pytest-cov \
+            pytest-asyncio
 
       - name: Show installed packages
         run: |
