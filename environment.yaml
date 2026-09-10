@@ -8,7 +8,7 @@ dependencies:
   - conda-forge::click>=8.4.2
   - conda-forge::cmor>=3.15.3
   - conda-forge::netcdf4>=1.7.4
-  - conda-forge::numpy>=2
+  - conda-forge::numpy>=2.5.3
   - conda-forge::pyyaml
   - conda-forge::textual
   - conda-forge::pytest
